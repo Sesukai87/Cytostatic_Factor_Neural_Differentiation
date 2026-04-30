@@ -1,1 +1,1 @@
-Modulation of Transcriptional Dynamics and Cortical Subtype Specification by Cytostatic Factors in Human iPSCs
+Cytostatic Factor Modulation of Transcriptional Dynamics And Cortical Subtype Specification in Human iPSCs
