@@ -625,7 +625,7 @@ plus_17W_filt <- subset(plus_17W_filt, high_subsets_Mt_percent == "FALSE")
 
 
 
-## Simple mitochondrial filtering for E6 sets
+## Simple mitochondrial filtering for Other sets
 minus_7W_E6[["percent.mt"]] <- PercentageFeatureSet(minus_7W_E6, pattern = "^MT-")
 minus_7W_E6$high_subsets_Mt_percent <- isOutlier(minus_7W_E6$percent.mt, type = "higher", min.diff = 0.5)
 minus_7W_E6_filt <- subset(minus_7W_E6, high_subsets_Mt_percent == "FALSE")
@@ -641,6 +641,14 @@ minus_12W_E6_filt <- subset(minus_12W_E6, high_subsets_Mt_percent == "FALSE")
 plus_12W_E6[["percent.mt"]] <- PercentageFeatureSet(plus_12W_E6, pattern = "^MT-")
 plus_12W_E6$high_subsets_Mt_percent <- isOutlier(plus_12W_E6$percent.mt, type = "higher", min.diff = 0.5)
 plus_12W_E6_filt <- subset(plus_12W_E6, high_subsets_Mt_percent == "FALSE")
+
+minus_7W_2[["percent.mt"]] <- PercentageFeatureSet(minus_7W_2, pattern = "^MT-")
+minus_7W_2$high_subsets_Mt_percent <- isOutlier(minus_7W_2$percent.mt, type = "higher", min.diff = 0.5)
+minus_7W_2_filt <- subset(minus_7W_2, high_subsets_Mt_percent == "FALSE")
+
+plus_7W_2[["percent.mt"]] <- PercentageFeatureSet(plus_7W_2, pattern = "^MT-")
+plus_7W_2$high_subsets_Mt_percent <- isOutlier(plus_7W_2$percent.mt, type = "higher", min.diff = 0.5)
+plus_7W_2_filt <- subset(plus_7W_2, high_subsets_Mt_percent == "FALSE")
 
 ## ------------------------------------------------------------------
 ## DoubletFinder (all filtered objects)
@@ -895,12 +903,11 @@ optimal.pk <- bcmvn_plus_12W_E6_filt %>% dplyr::filter(BCmetric == max(BCmetric)
 plus_12W_E6_filt <- doubletFinder(plus_12W_E6_filt, PCs = 1:30, pN = 0.25, pK = 0.3, nExp = nExp_poi.adj, reuse.pANN = NULL, sct = FALSE)
 
 ## ------------------------------------------------------------------
-## SoupX (3W samples as in your code)
+## SoupX
 ## ------------------------------------------------------------------
 
 ## minus_3W_filt SoupX
-minus_3W_filt <- subset(minus_3W_filt, gt_doublet_status == "singlet")
-minus_3W_filt <- subset(minus_3W_filt, DF.classifications_0.25_0.09_1197 == "Singlet")
+minus_3W_filt <- readRDS("~/project/IPSC_2025_Data/3W_minus/3W_minus_filt_after_df_seu")
 counts <- minus_3W_filt@assays$RNA@layers$counts
 colnames(counts) <- colnames(minus_3W_filt)
 rownames(counts) <- rownames(minus_3W_filt)
@@ -946,8 +953,7 @@ dev.off()
 saveRDS(seu2, "~/project/IPSC_2025_Data/3W_minus/3W_minus_filt_after_df_and_soupX_auto_seu")
 
 ## plus_3W_filt SoupX
-plus_3W_filt <- subset(plus_3W_filt, gt_doublet_status == "singlet")
-plus_3W_filt <- subset(plus_3W_filt, DF.classifications_0.25_0.3_1233 == "Singlet")
+plus_3W_filt <- readRDS("~/project/IPSC_2025_Data/3W_plus/3W_plus_filt_after_df_seu")
 counts <- plus_3W_filt@assays$RNA@layers$counts
 colnames(counts) <- colnames(plus_3W_filt)
 rownames(counts) <- rownames(plus_3W_filt)
@@ -990,3 +996,691 @@ tiff("3W_plus_after_soupX_markers.tiff", width = 1000, height = 1000)
 FeaturePlot_scCustom(seu2_plus, features = c("GLI3", "LMX1A", "DCX", "CFAP299"))
 dev.off()
 saveRDS(seu2_plus, "~/project/IPSC_2025_Data/3W_plus/3W_plus_filt_after_df_and_soupX_auto_seu")
+
+minus_7W_filt <- readRDS("~/project/IPSC_2025_Data/7W_minus/7W_minus_filt_after_df_seu")
+counts <- minus_7W_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(minus_7W_filt)
+rownames(counts) <- rownames(minus_7W_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/7W_minus/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_minus/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_minus/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+minus_7W_filt <- NormalizeData(minus_7W_filt)
+minus_7W_filt <- FindVariableFeatures(minus_7W_filt)
+minus_7W_filt <- ScaleData(minus_7W_filt)
+minus_7W_filt <- RunPCA(minus_7W_filt)
+minus_7W_filt <- RunUMAP(minus_7W_filt, dims = 1:30)
+minus_7W_filt <- FindNeighbors(minus_7W_filt, dims = 1:30)
+minus_7W_filt <- FindClusters(minus_7W_filt, resolution = 0.8)
+minus_7W_filt$Clusters <- Idents(minus_7W_filt)
+sc <- setClusters(sc, setNames(minus_7W_filt$Clusters, rownames(minus_7W_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/7W_minus/")
+tiff("7W_minus_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- minus_7W_filt@meta.data
+tiff("7W_minus_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(minus_7W_filt, features = c("GLI3", "LMX1A", "TBR1", "GAD2"))
+dev.off()
+tiff("7W_minus_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "LMX1A", "TBR1", "GAD2"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/7W_minus/7W_minus_filt_after_df_and_soupX_auto_seu")
+
+plus_7W_filt <- readRDS("~/project/IPSC_2025_Data/7W_plus/7W_plus_filt_after_df_seu")
+counts <- plus_7W_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(plus_7W_filt)
+rownames(counts) <- rownames(plus_7W_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/7W_plus/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_plus/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_plus/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+plus_7W_filt <- NormalizeData(plus_7W_filt)
+plus_7W_filt <- FindVariableFeatures(plus_7W_filt)
+plus_7W_filt <- ScaleData(plus_7W_filt)
+plus_7W_filt <- RunPCA(plus_7W_filt)
+plus_7W_filt <- RunUMAP(plus_7W_filt, dims = 1:30)
+plus_7W_filt <- FindNeighbors(plus_7W_filt, dims = 1:30)
+plus_7W_filt <- FindClusters(plus_7W_filt, resolution = 0.8)
+plus_7W_filt$Clusters <- Idents(plus_7W_filt)
+sc <- setClusters(sc, setNames(plus_7W_filt$Clusters, rownames(plus_7W_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/7W_plus/")
+tiff("7W_plus_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- plus_7W_filt@meta.data
+tiff("7W_plus_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(plus_7W_filt, features = c("GLI3", "LMX1A", "TBR1", "GAD2"))
+dev.off()
+tiff("7W_plus_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "LMX1A", "TBR1", "GAD2"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/7W_plus/7W_plus_filt_after_df_and_soupX_auto_seu")
+
+minus_7W_E6_filt <- readRDS("~/project/IPSC_2025_Data/7W_minus_E6/7W_minus_E6_filt_after_df_seu")
+counts <- minus_7W_E6_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(minus_7W_E6_filt)
+rownames(counts) <- rownames(minus_7W_E6_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/7W_minus_E6/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_minus_E6/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_minus_E6/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+minus_7W_E6_filt <- NormalizeData(minus_7W_E6_filt)
+minus_7W_E6_filt <- FindVariableFeatures(minus_7W_E6_filt)
+minus_7W_E6_filt <- ScaleData(minus_7W_E6_filt)
+minus_7W_E6_filt <- RunPCA(minus_7W_E6_filt)
+minus_7W_E6_filt <- RunUMAP(minus_7W_E6_filt, dims = 1:30)
+minus_7W_E6_filt <- FindNeighbors(minus_7W_E6_filt, dims = 1:30)
+minus_7W_E6_filt <- FindClusters(minus_7W_E6_filt, resolution = 0.4)
+minus_7W_E6_filt$Clusters <- Idents(minus_7W_E6_filt)
+sc <- setClusters(sc, setNames(minus_7W_E6_filt$Clusters, rownames(minus_7W_E6_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/7W_minus_E6/")
+tiff("7W_minus_E6_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- minus_7W_E6_filt@meta.data
+tiff("7W_minus_E6_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(minus_7W_E6_filt, features = c("GLI3", "GAD2", "SATB2", "BCL11B"))
+dev.off()
+tiff("7W_minus_E6_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "GAD2", "SATB2", "BCL11B"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/7W_minus_E6/7W_minus_E6_filt_after_df_and_soupX_auto_seu")
+
+plus_7W_E6_filt <- readRDS("~/project/IPSC_2025_Data/7W_plus_E6/7W_plus_E6_filt_after_df_seu")
+counts <- plus_7W_E6_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(plus_7W_E6_filt)
+rownames(counts) <- rownames(plus_7W_E6_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/7W_plus_E6/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_plus_E6/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_plus_E6/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+plus_7W_E6_filt <- NormalizeData(plus_7W_E6_filt)
+plus_7W_E6_filt <- FindVariableFeatures(plus_7W_E6_filt)
+plus_7W_E6_filt <- ScaleData(plus_7W_E6_filt)
+plus_7W_E6_filt <- RunPCA(plus_7W_E6_filt)
+plus_7W_E6_filt <- RunUMAP(plus_7W_E6_filt, dims = 1:30)
+plus_7W_E6_filt <- FindNeighbors(plus_7W_E6_filt, dims = 1:30)
+plus_7W_E6_filt <- FindClusters(plus_7W_E6_filt, resolution = 0.4)
+plus_7W_E6_filt$Clusters <- Idents(plus_7W_E6_filt)
+sc <- setClusters(sc, setNames(plus_7W_E6_filt$Clusters, rownames(plus_7W_E6_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/7W_plus_E6/")
+tiff("7W_plus_E6_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- plus_7W_E6_filt@meta.data
+tiff("7W_plus_E6_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(plus_7W_E6_filt, features = c("GLI3", "GAD2", "SATB2", "BCL11B"))
+dev.off()
+tiff("7W_plus_E6_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "GAD2", "SATB2", "BCL11B"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/7W_plus_E6/7W_plus_E6_filt_after_df_and_soupX_auto_seu")
+
+minus_7W_2_filt <- readRDS("~/project/IPSC_2025_Data/7W_minus_2/7W_minus_2_filt_after_df_seu")
+counts <- minus_7W_2_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(minus_7W_2_filt)
+rownames(counts) <- rownames(minus_7W_2_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/7W_minus_2/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_minus_2/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_minus_2/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+minus_7W_2_filt <- NormalizeData(minus_7W_2_filt)
+minus_7W_2_filt <- FindVariableFeatures(minus_7W_2_filt)
+minus_7W_2_filt <- ScaleData(minus_7W_2_filt)
+minus_7W_2_filt <- RunPCA(minus_7W_2_filt)
+minus_7W_2_filt <- RunUMAP(minus_7W_2_filt, dims = 1:30)
+minus_7W_2_filt <- FindNeighbors(minus_7W_2_filt, dims = 1:30)
+minus_7W_2_filt <- FindClusters(minus_7W_2_filt, resolution = 0.4)
+minus_7W_2_filt$Clusters <- Idents(minus_7W_2_filt)
+sc <- setClusters(sc, setNames(minus_7W_2_filt$Clusters, rownames(minus_7W_2_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/7W_minus_2/")
+tiff("7W_minus_2_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- minus_7W_2_filt@meta.data
+tiff("7W_minus_2_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(minus_7W_2_filt, features = c("GLI3", "LMX1A", "DCX", "CFAP299"))
+dev.off()
+tiff("7W_minus_2_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "LMX1A", "DCX", "CFAP299"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/7W_minus_2/7W_minus_2_filt_after_df_and_soupX_auto_seu")
+
+plus_7W_2_filt <- readRDS("~/project/IPSC_2025_Data/7W_plus_2/7W_plus_2_filt_after_df_seu")
+counts <- plus_7W_2_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(plus_7W_2_filt)
+rownames(counts) <- rownames(plus_7W_2_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/7W_plus_2/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_plus_2/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/7W_plus_2/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+plus_7W_2_filt <- NormalizeData(plus_7W_2_filt)
+plus_7W_2_filt <- FindVariableFeatures(plus_7W_2_filt)
+plus_7W_2_filt <- ScaleData(plus_7W_2_filt)
+plus_7W_2_filt <- RunPCA(plus_7W_2_filt)
+plus_7W_2_filt <- RunUMAP(plus_7W_2_filt, dims = 1:30)
+plus_7W_2_filt <- FindNeighbors(plus_7W_2_filt, dims = 1:30)
+plus_7W_2_filt <- FindClusters(plus_7W_2_filt, resolution = 0.4)
+plus_7W_2_filt$Clusters <- Idents(plus_7W_2_filt)
+sc <- setClusters(sc, setNames(plus_7W_2_filt$Clusters, rownames(plus_7W_2_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/7W_plus_2/")
+tiff("7W_plus_2_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- plus_7W_2_filt@meta.data
+tiff("7W_plus_2_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(plus_7W_2_filt, features = c("GLI3", "LMX1A", "DCX", "CFAP299"))
+dev.off()
+tiff("7W_plus_2_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "LMX1A", "DCX", "CFAP299"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/7W_plus_2/7W_plus_2_filt_after_df_and_soupX_auto_seu")
+
+minus_12W_filt <- readRDS("~/project/IPSC_2025_Data/12W_minus/12W_minus_filt_after_df_seu")
+counts <- minus_12W_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(minus_12W_filt)
+rownames(counts) <- rownames(minus_12W_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/12W_minus/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/12W_minus/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/12W_minus/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+minus_12W_filt <- NormalizeData(minus_12W_filt)
+minus_12W_filt <- FindVariableFeatures(minus_12W_filt)
+minus_12W_filt <- ScaleData(minus_12W_filt)
+minus_12W_filt <- RunPCA(minus_12W_filt)
+minus_12W_filt <- RunUMAP(minus_12W_filt, dims = 1:30)
+minus_12W_filt <- FindNeighbors(minus_12W_filt, dims = 1:30)
+minus_12W_filt <- FindClusters(minus_12W_filt, resolution = 0.8)
+minus_12W_filt$Clusters <- Idents(minus_12W_filt)
+sc <- setClusters(sc, setNames(minus_12W_filt$Clusters, rownames(minus_12W_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/12W_minus/")
+tiff("12W_minus_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- minus_12W_filt@meta.data
+tiff("12W_minus_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(minus_12W_filt, features = c("GLI3", "LMX1A", "TBR1", "GAD2"))
+dev.off()
+tiff("12W_minus_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "LMX1A", "TBR1", "GAD2"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/12W_minus/12W_minus_filt_after_df_and_soupX_auto_seu")
+
+plus_12W_filt <- readRDS("~/project/IPSC_2025_Data/12W_plus/12W_plus_filt_after_df_seu")
+counts <- plus_12W_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(plus_12W_filt)
+rownames(counts) <- rownames(plus_12W_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/12W_plus/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/12W_plus/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/12W_plus/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+plus_12W_filt <- NormalizeData(plus_12W_filt)
+plus_12W_filt <- FindVariableFeatures(plus_12W_filt)
+plus_12W_filt <- ScaleData(plus_12W_filt)
+plus_12W_filt <- RunPCA(plus_12W_filt)
+plus_12W_filt <- RunUMAP(plus_12W_filt, dims = 1:30)
+plus_12W_filt <- FindNeighbors(plus_12W_filt, dims = 1:30)
+plus_12W_filt <- FindClusters(plus_12W_filt, resolution = 0.8)
+plus_12W_filt$Clusters <- Idents(plus_12W_filt)
+sc <- setClusters(sc, setNames(plus_12W_filt$Clusters, rownames(plus_12W_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/12W_plus/")
+tiff("12W_plus_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- plus_12W_filt@meta.data
+tiff("12W_plus_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(plus_12W_filt, features = c("GLI3", "LMX1A", "TBR1", "GAD2"))
+dev.off()
+tiff("12W_plus_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "LMX1A", "TBR1", "GAD2"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/12W_plus/12W_plus_filt_after_df_and_soupX_auto_seu")
+
+minus_12W_E6_filt <- readRDS("~/project/IPSC_2025_Data/12W_minus_E6/12W_minus_E6_filt_after_df_seu")
+counts <- minus_12W_E6_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(minus_12W_E6_filt)
+rownames(counts) <- rownames(minus_12W_E6_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/12W_minus_E6/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/12W_minus_E6/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/12W_minus_E6/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+minus_12W_E6_filt <- NormalizeData(minus_12W_E6_filt)
+minus_12W_E6_filt <- FindVariableFeatures(minus_12W_E6_filt)
+minus_12W_E6_filt <- ScaleData(minus_12W_E6_filt)
+minus_12W_E6_filt <- RunPCA(minus_12W_E6_filt)
+minus_12W_E6_filt <- RunUMAP(minus_12W_E6_filt, dims = 1:30)
+minus_12W_E6_filt <- FindNeighbors(minus_12W_E6_filt, dims = 1:30)
+minus_12W_E6_filt <- FindClusters(minus_12W_E6_filt, resolution = 0.4)
+minus_12W_E6_filt$Clusters <- Idents(minus_12W_E6_filt)
+sc <- setClusters(sc, setNames(minus_12W_E6_filt$Clusters, rownames(minus_12W_E6_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/12W_minus_E6/")
+tiff("12W_minus_E6_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- minus_12W_E6_filt@meta.data
+tiff("12W_minus_E6_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(minus_12W_E6_filt, features = c("GLI3", "GAD2", "SATB2", "BCL11B"))
+dev.off()
+tiff("12W_minus_E6_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "GAD2", "SATB2", "BCL11B"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/12W_minus_E6/12W_minus_E6_filt_after_df_and_soupX_auto_seu")
+
+plus_12W_E6_filt <- readRDS("~/project/IPSC_2025_Data/12W_plus_E6/12W_plus_E6_filt_after_df_seu")
+counts <- plus_12W_E6_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(plus_12W_E6_filt)
+rownames(counts) <- rownames(plus_12W_E6_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/12W_plus_E6/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/12W_plus_E6/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/12W_plus_E6/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+plus_12W_E6_filt <- NormalizeData(plus_12W_E6_filt)
+plus_12W_E6_filt <- FindVariableFeatures(plus_12W_E6_filt)
+plus_12W_E6_filt <- ScaleData(plus_12W_E6_filt)
+plus_12W_E6_filt <- RunPCA(plus_12W_E6_filt)
+plus_12W_E6_filt <- RunUMAP(plus_12W_E6_filt, dims = 1:30)
+plus_12W_E6_filt <- FindNeighbors(plus_12W_E6_filt, dims = 1:30)
+plus_12W_E6_filt <- FindClusters(plus_12W_E6_filt, resolution = 0.4)
+plus_12W_E6_filt$Clusters <- Idents(plus_12W_E6_filt)
+sc <- setClusters(sc, setNames(plus_12W_E6_filt$Clusters, rownames(plus_12W_E6_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/12W_plus_E6/")
+tiff("12W_plus_E6_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- plus_12W_E6_filt@meta.data
+tiff("12W_plus_E6_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(plus_12W_E6_filt, features = c("GLI3", "GAD2", "SATB2", "BCL11B"))
+dev.off()
+tiff("12W_plus_E6_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "GAD2", "SATB2", "BCL11B"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/12W_plus_E6/12W_plus_E6_filt_after_df_and_soupX_auto_seu")
+
+minus_17W_filt <- readRDS("~/project/IPSC_2025_Data/17W_minus/17W_minus_filt_after_df_seu")
+counts <- minus_17W_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(minus_17W_filt)
+rownames(counts) <- rownames(minus_17W_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/17W_minus/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/17W_minus/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/17W_minus/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+minus_17W_filt <- NormalizeData(minus_17W_filt)
+minus_17W_filt <- FindVariableFeatures(minus_17W_filt)
+minus_17W_filt <- ScaleData(minus_17W_filt)
+minus_17W_filt <- RunPCA(minus_17W_filt)
+minus_17W_filt <- RunUMAP(minus_17W_filt, dims = 1:30)
+minus_17W_filt <- FindNeighbors(minus_17W_filt, dims = 1:30)
+minus_17W_filt <- FindClusters(minus_17W_filt, resolution = 0.8)
+minus_17W_filt$Clusters <- Idents(minus_17W_filt)
+sc <- setClusters(sc, setNames(minus_17W_filt$Clusters, rownames(minus_17W_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/17W_minus/")
+tiff("17W_minus_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- minus_17W_filt@meta.data
+tiff("17W_minus_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(minus_17W_filt, features = c("GLI3", "AQP4", "DCX", "CFAP299"))
+dev.off()
+tiff("17W_minus_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "AQP4", "DCX", "CFAP299"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/17W_minus/17W_minus_filt_after_df_and_soupX_auto_seu")
+
+plus_17W_filt <- readRDS("~/project/IPSC_2025_Data/17W_plus/17W_plus_filt_after_df_seu")
+counts <- plus_17W_filt@assays$RNA@layers$counts
+colnames(counts) <- colnames(plus_17W_filt)
+rownames(counts) <- rownames(plus_17W_filt)
+write10xCounts(x = counts, path = "~/project/IPSC_2025_Data/17W_plus/filtered_feature_bc_matrix2")
+toc <- Seurat::Read10X("~/project/IPSC_2025_Data/17W_plus/filtered_feature_bc_matrix2")
+tod <- Seurat::Read10X("~/project/IPSC_2025_Data/17W_plus/raw_feature_bc_matrix")
+common_genes <- intersect(rownames(toc), rownames(tod))
+toc <- toc[common_genes, ]
+tod <- tod[common_genes, ]
+sc <- SoupChannel(tod, toc, calcSoupProfile = FALSE)
+sc <- estimateSoup(sc)
+plus_17W_filt <- NormalizeData(plus_17W_filt)
+plus_17W_filt <- FindVariableFeatures(plus_17W_filt)
+plus_17W_filt <- ScaleData(plus_17W_filt)
+plus_17W_filt <- RunPCA(plus_17W_filt)
+plus_17W_filt <- RunUMAP(plus_17W_filt, dims = 1:30)
+plus_17W_filt <- FindNeighbors(plus_17W_filt, dims = 1:30)
+plus_17W_filt <- FindClusters(plus_17W_filt, resolution = 0.8)
+plus_17W_filt$Clusters <- Idents(plus_17W_filt)
+sc <- setClusters(sc, setNames(plus_17W_filt$Clusters, rownames(plus_17W_filt@meta.data)))
+sc <- autoEstCont(sc)
+setwd("~/project/IPSC_2025_Data/17W_plus/")
+tiff("17W_plus_autoEstcon.tiff", width = 500, height = 500)
+autoEstCont(sc)
+dev.off()
+out <- adjustCounts(sc, roundToInt = TRUE)
+seu2 <- CreateSeuratObject(out)
+seu2 <- NormalizeData(seu2)
+seu2 <- FindVariableFeatures(seu2)
+seu2 <- ScaleData(seu2)
+seu2 <- RunPCA(seu2)
+seu2 <- RunUMAP(seu2, dims = 1:30)
+seu2 <- FindNeighbors(seu2, dims = 1:30)
+seu2 <- FindClusters(seu2)
+seu2@meta.data <- plus_17W_filt@meta.data
+tiff("17W_plus_before_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(plus_17W_filt, features = c("GLI3", "LMX1A", "DCX", "CFAP299"))
+dev.off()
+tiff("17W_plus_after_soupX_markers.tiff", width = 1000, height = 1000)
+FeaturePlot_scCustom(seu2, features = c("GLI3", "LMX1A", "DCX", "CFAP299"))
+dev.off()
+saveRDS(seu2, "~/project/IPSC_2025_Data/17W_plus/17W_plus_filt_after_df_and_soupX_auto_seu")
+
+library(Seurat)
+
+minus_3W_filt <- readRDS("~/project/IPSC_2025_Data/3W_minus/3W_minus_filt_after_df_and_soupX_auto_seu")
+plus_3W_filt <- readRDS("~/project/IPSC_2025_Data/3W_plus/3W_plus_filt_after_df_and_soupX_auto_seu")
+minus_7W_filt <- readRDS("~/project/IPSC_2025_Data/7W_minus/7W_minus_filt_after_df_and_soupX_auto_seu")
+plus_7W_filt <- readRDS("~/project/IPSC_2025_Data/7W_plus/7W_plus_filt_after_df_and_soupX_auto_seu")
+minus_7W_2_filt <- readRDS("~/project/IPSC_2025_Data/7W_minus_2/7W_minus_2_filt_after_df_and_soupX_auto_seu")
+plus_7W_2_filt <- readRDS("~/project/IPSC_2025_Data/7W_plus_2/7W_plus_2_filt_after_df_and_soupX_auto_seu")
+minus_7W_E6_filt <- readRDS("~/project/IPSC_2025_Data/7W_minus_E6/7W_minus_E6_filt_after_df_and_soupX_auto_seu")
+plus_7W_E6_filt <- readRDS("~/project/IPSC_2025_Data/7W_plus_E6/7W_plus_E6_filt_after_df_and_soupX_auto_seu")
+minus_12W_filt <- readRDS("~/project/IPSC_2025_Data/12W_minus/12W_minus_filt_after_df_and_soupX_auto_seu")
+plus_12W_filt <- readRDS("~/project/IPSC_2025_Data/12W_plus/12W_plus_filt_after_df_and_soupX_auto_seu")
+minus_12W_E6_filt <- readRDS("~/project/IPSC_2025_Data/12W_minus_E6/12W_minus_E6_filt_after_df_and_soupX_auto_seu")
+plus_12W_E6_filt <- readRDS("~/project/IPSC_2025_Data/12W_plus_E6/12W_plus_E6_filt_after_df_and_soupX_auto_seu")
+minus_17W_filt <- readRDS("~/project/IPSC_2025_Data/17W_minus/17W_minus_filt_after_df_and_soupX_auto_seu")
+plus_17W_filt <- readRDS("~/project/IPSC_2025_Data/17W_plus/17W_plus_filt_after_df_and_soupX_auto_seu")
+merged <- merge(
+  minus_3W_filt,
+  y = list(
+    plus_3W_filt,
+    minus_7W_filt,
+    plus_7W_filt,
+    minus_7W_2_filt,
+    plus_7W_2_filt,
+    minus_7W_E6_filt,
+    plus_7W_E6_filt,
+    minus_12W_filt,
+    plus_12W_filt,
+    minus_12W_E6_filt,
+    plus_12W_E6_filt,
+    minus_17W_filt,
+    plus_17W_filt
+  ),
+  project = "IPSC_2025_merged"
+)
+
+merged <- NormalizeData(merged) %>% FindVariableFeatures() %>% ScaleData(merged_2, vars.to.regress = "neural_induction_media") %>% RunPCA() %>% RunHarmony(group.by.vars = c("gt_line", "Protocol", "neural_induction_media")) %>% RunUMAP(reduction = "harmony", dims = 1:30, reduction.name = "umap_harmony") %>% FindNeighbors(reduction = "harmony", dims = 1:30) %>% FindClusters(resolution = 1)
+
+merged <- RenameIdents(merged,
+  `0`  = "Hem_RG",
+  `1`  = "DL_ExN",
+  `2`  = "Hem_RG",
+  `3`  = "CGE_In",
+  `4`  = "Unknown",
+  `5`  = "MGE_In",
+  `6`  = "Unknown",
+  `7`  = "RG-mixed",
+  `8`  = "UL_ExN",
+  `9`  = "CGE_In",
+  `10` = "CRN",
+  `11` = "UL_ExN",
+  `12` = "Hem_RG",
+  `13` = "Epithelial",
+  `14` = "Hem_RG",
+  `15` = "RG",
+  `16` = "MGE_In",
+  `17` = "DL_ExN",
+  `18` = "LGE_In",
+  `19` = "DL_ExN",
+  `20` = "MGE_In",
+  `21` = "UL_ExN",
+  `22` = "Unknown",
+  `23` = "RG_mixed",
+  `24` = "LGE_In",
+  `25` = "RG-mixed",
+  `26` = "Unknown",
+  `27` = "Epithelial",
+  `28` = "RG",
+  `29` = "CRN",
+  `30` = "Hem_RG",
+  `31` = "Astrocyte",
+  `32` = "oRG",
+  `33` = "UL_ExN",
+  `34` = "CRN",
+  `35` = "MGE_In")
+
+#manual section of small population of Astrocytes
+iPSC_merged$ipsc_only_cluster <- Idents(iPSC_merged)
+plot <- FeaturePlot_scCustom(iPSC_merged, features = "GFAP")
+cells.located <- CellSelector(plot = plot)
+iPSC_merged$ipsc_only_cluster[cells.located] <- "Astrocyte"
+
+#manual section of small population of LGE_In
+plot <- FeaturePlot_scCustom(iPSC_merged, features = "ISL1")
+cells.located <- CellSelector(plot = plot)
+iPSC_merged$ipsc_only_cluster[cells.located] <- "LGE_In"
+
+marker_list <- list(
+ExN = c("SATB2", "TAFA1", "FEZF2", "DOK5", "SLC17A7", "SLC17A6", "NEUROD1", "NEUROD4", "NEUROD2", "NEUROD6", "NEUROG1", "EOMES", "NEUROG2", "TBR1"),
+In = c("GAD2", "GAD1", "SLC32A1", "DLX6-AS1", "DLX1", "DLX2", "DLX5", "DLX6"),
+CRN = c("RELN", "EBF3", "LHX5", "LHX1", "TP73", "MAB21L1"),
+UL = c("SATB2", "CUX2", "RORB", "POU3F2", "DOK5", "NRGN"),
+DL = c("FEZF2", "BCL11B", "CRYM", "SEMA3E", "SORCS2", "HS3ST4", "ETV1"),  
+CGE = c("ADARB2", "CALB2", "VIP", "CCK", "HTR3A", "NR2F1", "NR2F2"),
+LGE = c("SP8", "SIX3", "ISL1", "ZNF503"),
+MGE = c("LHX6", "NKX2-1", "SP9"),
+IPC_EN = c("EOMES", "NEUROD4", "NEUROG2", "PPP1R17", "NEUROD1"),
+Astrocyte = c("CD44", "GFAP", "S100B", "AQP4", "ALDOC"),
+Hem = c("LMX1A", "WNT3A", "RSPO2"),
+RG = c("PAX6", "EMX2", "SALL1", "GLI3", "HES1", "PTN", "SLC1A3", "SOX2", "HMGA2", "PCNA"),
+Epithelial = c("DNAAF1", "VWA3A", "CFAP47","DEUP1", "SHISA8"),
+#L6b = c("NXPH4", "CCN2", "NR4A2", "ST18"),
+#Vascular = c("ESAM", "PECAM1", "PDGFRB")
+)
+
+merged <- JoinLayers(merged)
+
+for (nm in names(marker_list)) {
+  merged <- AddModuleScore(
+    merged,
+    features = list(marker_list[[nm]]),
+    name = paste0(nm, "_new_mod")   # <-- use "new_mod" suffix
+  )
+  
+  # Seurat will create columns like "RG_new_mod1"
+  # Rename them to just "RG_new_mod"
+  merged[[paste0(nm, "_new_mod")]] <- merged[[paste0(nm, "_new_mod1")]]
+  merged[[paste0(nm, "_new_mod1")]] <- NULL
+}
+
+Celltype0 <- merged$ipsc_only_cluster
+Celltype1 <- as.numeric(merged$ExN_new_mod)
+Celltype2 <- as.numeric(merged$In_new_mod)
+Celltype3 <- as.numeric(merged$IPC_EN_new_mod)
+Celltype4 <- as.numeric(merged$RG_new_mod)
+Celltype5 <- as.numeric(merged$DL_new_mod)
+Celltype6 <- as.numeric(merged$UL_new_mod)
+Celltype7 <- as.numeric(merged$CRN_new_mod)
+
+
+names(Celltype0) <- colnames(merged)
+names(Celltype1) <- colnames(merged)
+names(Celltype2) <- colnames(merged)
+names(Celltype3) <- colnames(merged)
+names(Celltype4) <- colnames(merged)
+names(Celltype5) <- colnames(merged)
+names(Celltype6) <- colnames(merged)
+names(Celltype7) <- colnames(merged)
+
+consensusClusterLabels <- Celltype0
+# All new labels you assign
+new_labels <- c("IPC_In", "Unknown", "IPC_ExN")
+
+# Expand levels on the object you will modify
+consensusClusterLabels <- factor(
+  consensusClusterLabels,
+  levels = union(levels(consensusClusterLabels), new_labels)
+)
+
+consensusClusterLabels[names(which(Celltype0 == "RG-mixed" & Celltype2 > 0))] <- "IPC_In"
+consensusClusterLabels[names(which(Celltype0 == "CRN" & Celltype7 <= 0))] <- "Unknown"
+consensusClusterLabels[names(which(Celltype3 > 0))] <- "IPC_ExN"
+consensusClusterLabels[names(which(Celltype0 == "UL_ExN" & Celltype6 <= 0 & Celltype2 > 0))] <- "CGE_In"
+consensusClusterLabels[names(which(Celltype0 == "DL_ExN" & Celltype2 > 0))] <- "CGE_In"
+consensusClusterLabels[consensusClusterLabels == "RG-mixed"] <- "RG"
+consensusClusterLabels[consensusClusterLabels == "oRG"] <- "RG"
+
+merged$ipsc_only_cluster_consensus <- consensusClusterLabels
+saveRDS(merged, "~/project/IPSC_2025_Data/merged_IPSC_derived_forebrain")
