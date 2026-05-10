@@ -1682,5 +1682,13 @@ consensusClusterLabels[names(which(Celltype0 == "DL_ExN" & Celltype2 > 0))] <- "
 consensusClusterLabels[consensusClusterLabels == "RG-mixed"] <- "RG"
 consensusClusterLabels[consensusClusterLabels == "oRG"] <- "RG"
 
-merged$ipsc_only_cluster_consensus <- consensusClusterLabels
-saveRDS(merged, "~/project/IPSC_2025_Data/merged_IPSC_derived_forebrain")
+merged$Celltype <- consensusClusterLabels
+fetal <- readRDS("~/project/Wang_2025/20230131_multiome_clean.rds")
+DefaultAssay(fetal) <- "RNA"
+fetal@assays$ATAC <- NULL
+fetal@assays$SCT <- NULL
+fetal@assays$integrated <- NULL
+fetal <- JoinLayers(fetal)
+fetal$Celltype <- fetal$type
+merged <- merge(merged, fetal)
+saveRDS(merged, "~/project/IPSC_2025_Data/merged_Fetal_IPSC_derived_forebrain")
