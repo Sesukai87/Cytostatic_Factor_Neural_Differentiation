@@ -1683,6 +1683,8 @@ consensusClusterLabels[consensusClusterLabels == "RG-mixed"] <- "RG"
 consensusClusterLabels[consensusClusterLabels == "oRG"] <- "RG"
 
 merged$Celltype <- consensusClusterLabels
+merged$Sampletype <- rep("IPSC-Derived", times = ncol(merged))
+
 fetal <- readRDS("~/project/Wang_2025/20230131_multiome_clean.rds")
 DefaultAssay(fetal) <- "RNA"
 fetal@assays$ATAC <- NULL
@@ -1691,6 +1693,18 @@ fetal@assays$integrated <- NULL
 fetal <- JoinLayers(fetal)
 fetal$Celltype <- fetal$type
 fetal$Sampletype <- rep("Fetal", times = ncol(fetal))
-merged$Sampletype <- rep("IPSC-Derived", times = ncol(merged))
+for (nm in names(marker_list)) {
+  fetal <- AddModuleScore(
+    fetal,
+    features = list(marker_list[[nm]]),
+    name = paste0(nm, "_new_mod")   # <-- use "new_mod" suffix
+  )
+  
+  # Seurat will create columns like "RG_new_mod1"
+  # Rename them to just "RG_new_mod"
+  fetal[[paste0(nm, "_new_mod")]] <- fetal[[paste0(nm, "_new_mod1")]]
+  fetal[[paste0(nm, "_new_mod1")]] <- NULL
+}
+
 merged <- merge(merged, fetal)
 saveRDS(merged, "~/project/IPSC_2025_Data/merged_Fetal_IPSC_derived_forebrain")
