@@ -1690,5 +1690,7 @@ fetal@assays$SCT <- NULL
 fetal@assays$integrated <- NULL
 fetal <- JoinLayers(fetal)
 fetal$Celltype <- fetal$type
+fetal$Sampletype <- rep("Fetal", times = ncol(fetal))
+merged$Sampletype <- rep("IPSC-Derived", times = ncol(merged))
 merged <- merge(merged, fetal)
 saveRDS(merged, "~/project/IPSC_2025_Data/merged_Fetal_IPSC_derived_forebrain")
