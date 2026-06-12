@@ -48,8 +48,6 @@ desired_order <- c(
   "CRN"
 )
 
-desired_order <- c("RG", "IPC_ExN", "DL_ExN", "UL_ExN", "Astrocyte", "IPC_In", "CGE_In", "LGE_In", "MGE_In", "Hem_RG", "CRN", "Epithelial", "Unknown")
-
 
 facet_order <-  c("D21 KOLF2.1", "D49 KOLF2.1",  "D84 KOLF2.1",  "D119 KOLF2.1",  "D21 O2C3",  "D49 O2C3",  "D84 O2C3",  "D119 O2C3", "D21 JHC1", "D49 JHC1", "D84 JHC1") 
 
