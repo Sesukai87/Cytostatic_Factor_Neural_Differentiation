@@ -13,7 +13,7 @@ merged_fetal_ipsc <- NormalizeData(merged_fetal_ipsc) %>%
   FindVariableFeatures() %>%
   ScaleData() %>%
   RunPCA() %>%
-  RunHarmony(group.by.vars = "SampleID2") %>%
+  RunHarmony(group.by.vars = "SampleID") %>%
   RunUMAP(reduction = "harmony", dims = 1:30)
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,8 @@ merged_fetal_ipsc$Celltype <- as.character(merged_fetal_ipsc$Celltype)
 merged_cellnames <- colnames(merged_fetal_ipsc)
 is_fetal_cell <- merged_fetal_ipsc$Sampletype == "Fetal"
 stripped_barcode <- sub("_[0-9]+$", "", merged_cellnames)
-
+fetal <- readRDS("~/project/11_29_25_merged_IPSC_Fetal")
+fetal <- subset(fetal, Sampletype == "Fetal")
 fetal_types <- as.character(fetal$type)
 names(fetal_types) <- colnames(fetal)
 
@@ -68,34 +69,43 @@ celltype_map <- c(
   "EN-L6-CT"                  = "DL_ExN",
   # IPC (excitatory) -> IPC_ExN
   "IPC-EN"                    = "IPC_ExN",
-  "EN-Newborn"                = "IPC_ExN"
+  "EN-Newborn"                = "IPC_ExN",
   # Radial glia -> RG
   "RG-vRG"                    = "RG",
   "RG-oRG"                    = "RG",
   "RG-tRG"                    = "RG",
+  
   # Interneurons - MGE-derived -> MGE_In
   "IN-MGE-Immature"           = "MGE_In",
   "IN-MGE-PV"                 = "MGE_In",
   "IN-MGE-SST"                = "MGE_In",
+  
   # Interneurons - CGE-derived -> CGE_In
   "IN-CGE-Immature"           = "CGE_In",
   "IN-CGE-VIP"                = "CGE_In",
   "IN-CGE-SNCG"                = "CGE_In",
   "IN-CGE-LAMP5"               = "CGE_In",
+  
   # Interneurons - LGE-derived -> LGE_In
   "IN-dLGE-Immature"          = "LGE_In",
+  
   # Astrocytes -> Astrocyte
   "Astrocyte-Protoplasmic"    = "Astrocyte",
   "Astrocyte-Immature"        = "Astrocyte",
   "Astrocyte-Fibrous"         = "Astrocyte",
   "IPC-Glia"                  = "Astrocyte",
+  
   # Cajal-Retzius -> CRN
   "Cajal-Retzius cell"        = "CRN",
+  
   # Vascular -> Vascular/Fibroblast
   "Vascular"                  = "Vascular/Fibroblast",
-  # Unchanged / Misc
+  
+  # Unchanged / already-final labels
   "OPC"                       = "OPC",
   "Unknown"                   = "Unknown",
+  
+  # NEW categories that should be KEPT as-is (not collapsed)
   "Microglia"                 = "Microglia",
   "Oligodendrocyte"           = "Oligodendrocyte",
   "Oligodendrocyte-Immature"  = "Oligodendrocyte"
@@ -141,27 +151,76 @@ stopifnot(!anyNA(merged_fetal_ipsc$Protocol))
 # uses the same color for the same cell type, even if a given group is
 # missing some cell types entirely.
 celltype_levels <- levels(merged_fetal_ipsc$Celltype)
-celltype_colors <- setNames(
-  scales::hue_pal()(length(celltype_levels)),
-  celltype_levels
+
+# A maximally-distinct 17-color palette (default hue_pal's evenly-spaced
+# hues are hard to tell apart at this many categories). Tries several
+# sources in order of availability so it works without installing packages
+# incompatible with your R version:
+#   1. Seurat's built-in DiscretePalette("polychrome") - zero new deps,
+#      Seurat is already loaded (36 maximally-distinct colors, we take 17).
+#   2. pals::glasbey() - same glasbey palette Polychrome would give.
+#   3. a hand-picked ColorBrewer-based fallback.
+n_ct <- length(celltype_levels)
+celltype_palette <- tryCatch(
+  Seurat::DiscretePalette(n_ct, palette = "polychrome"),
+  error = function(e) {
+    if (requireNamespace("pals", quietly = TRUE)) {
+      unname(pals::glasbey(n_ct))
+    } else {
+      c("#E41A1C","#377EB8","#4DAF4A","#984EA3","#FF7F00","#A65628",
+        "#F781BF","#999999","#66C2A5","#FC8D62","#8DA0CB","#E78AC3",
+        "#A6D854","#FFD92F","#1B9E77","#D95F02","#7570B3")[seq_len(n_ct)]
+    }
+  }
 )
+celltype_colors <- setNames(celltype_palette, celltype_levels)
 
 make_dimplot <- function(obj, protocol_label) {
   sub_obj <- subset(obj, Protocol == protocol_label)
-  DimPlot(sub_obj, group.by = "Celltype", cols = celltype_colors) +
+  # Drop celltype levels with zero cells in THIS subset, so celltypes that
+  # exist only in the fetal data (e.g. Microglia, OPC, Oligodendrocyte) do
+  # not appear in the coloring of the iPSC-derived (-SDF / +SDF) panels
+  # where they are absent. The shared celltype_colors mapping still keeps
+  # each celltype's color consistent across panels.
+  sub_obj$Celltype <- droplevels(sub_obj$Celltype)
+  present_levels <- levels(sub_obj$Celltype)
+  # order.by puts the RAREST celltypes last so they're drawn ON TOP of the
+  # dense common populations - otherwise low-abundance fetal-only types
+  # (Microglia, OPC, Oligodendrocyte) get buried under the big clusters and
+  # look "missing" even when their points are present.
+  rare_first <- names(sort(table(sub_obj$Celltype)))  # rarest ... commonest
+  DimPlot(sub_obj, group.by = "Celltype", cols = celltype_colors[present_levels],
+          order = rev(rare_first)) +   # DimPlot draws `order` last = on top
     ggtitle(protocol_label) +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 }
 
+# Build a MASTER legend from the FULL data (all celltypes present, including
+# the fetal-only Microglia/OPC/Oligodendrocyte/Vascular types) so the shared
+# legend lists every celltype - not just those in whichever single panel we
+# happened to keep a legend on. Previously the legend was harvested from the
+# +SDF panel, which legitimately lacks the fetal-only types, so they were
+# missing from the legend entirely.
+legend_src_plot <- DimPlot(merged_fetal_ipsc, group.by = "Celltype",
+                           cols = celltype_colors) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_blank())
+master_legend <- cowplot::get_legend(legend_src_plot)
+
+# All three data panels drop their own legends; the master legend is added
+# as a 4th column so it reflects every celltype.
 p2_fetal <- make_dimplot(merged_fetal_ipsc, "Fetal") + NoLegend()
 p2_minus <- make_dimplot(merged_fetal_ipsc, "-SDF") + NoLegend()
-p2_plus  <- make_dimplot(merged_fetal_ipsc, "+SDF")
+p2_plus  <- make_dimplot(merged_fetal_ipsc, "+SDF") + NoLegend()
 
-# combine with a single shared legend (only the last panel keeps its legend,
-# avoiding patchwork's `&` operator, which conflicts with an S4 `&` method
-# registered by Seurat/SeuratObject)
-p2 <- p2_fetal + p2_minus + p2_plus +
-  plot_layout(ncol = 3)
+# Combine the three panels + shared master legend. Using cowplot::plot_grid
+# (rather than patchwork's `+`/`&`, which conflicts with Seurat's S4 `&`).
+p2 <- cowplot::plot_grid(
+  p2_fetal, p2_minus, p2_plus, master_legend,
+  nrow = 1,
+  rel_widths = c(1, 1, 1, 0.35)
+)
 p2
 
 # ---------------------------------------------------------------------------
@@ -173,12 +232,10 @@ p2
 
 # Pick 3 canonical markers per Celltype from the provided module_list.
 # Edit these choices if you'd like different markers per group.
-# Pick 3 canonical markers per Celltype from the provided module_list.
-# Edit these choices if you'd like different markers per group.
 marker_list <- list(
   RG                   = c("PAX6", "GLI3", "HES1"),
   IPC_ExN              = c("EOMES", "NEUROG2", "NEUROD4"),
-  DL_ExN               = c("TBR1", "NEUROD2", "SLC17A6", "FEZF2", "BCL11B", "CRYM"),
+  DL_ExN               = c("FEZF2", "BCL11B", "CRYM"),
   UL_ExN               = c("SATB2", "CUX2", "RORB"),
   IPC_In               = c("DLX1", "DLX2", "GAD1"),
   CGE_In               = c("ADARB2", "VIP", "NR2F2"),
@@ -272,7 +329,7 @@ p3 <- ggplot(dot_df, aes(x = gene, y = Protocol)) +
   scale_size(range = c(0, 6), name = "Pct.\nExpressed") +
   theme_bw(base_size = 11) +
   theme(
-    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+    axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5, size = 10),
     strip.text.y.left = element_text(angle = 0, size = 9, face = "bold"),
     strip.placement = "outside",
     panel.spacing = unit(0.1, "lines")
@@ -289,18 +346,19 @@ fig1_combined <- plot_grid(
   ncol = 1,
   rel_heights = c(1, 1.6),
   labels = c("B", "C"),
-  label_size = 16, label_y = 1.02
+  label_size = 16,
+  label_y = c(1, 1.02)  # nudge "C" up slightly relative to panel C; tweak this value as needed
 )
 
 ggsave(
-  filename = "~/project/IPSC_2025_Data/Figure1_BC_combined.png",
+  filename = "Figure1_BC_combined.png",
   plot = fig1_combined,
-  width = 14, height = 16, units = "in",
+  width = 20, height = 15, units = "in",
   dpi = 600, bg = "white"
 )
 
 ggsave(
-  filename = "~/project/IPSC_2025_Data/Figure1_BC_combined.pdf",
+  filename = "Figure1_BC_combined.pdf",
   plot = fig1_combined,
   width = 14, height = 16, units = "in",
   dpi = 600, bg = "white"
