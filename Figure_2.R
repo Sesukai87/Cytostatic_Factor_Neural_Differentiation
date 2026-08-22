@@ -20,11 +20,11 @@ merged <- readRDS("~/project/IPSC_2025_Data/merged_Fetal_IPSC_derived_forebrain"
 merged_IPSC <- subset(merged, Sampletype == "IPSC-Derived")
 merged_IPSC$Age_line <- paste(merged_IPSC$Age, merged_IPSC$gt_line)
 data <- as.data.table(merged_IPSC@meta.data)
-# Count per SampleID / protocol / class
+# Count per SampleID2 / protocol / class
 prop_data <- data[, .(n = .N), 
-                  by = .(SampleID, gt_line, Age, Protocol, Celltype, Age_line, neural_induction_media)]
-# Compute frequencies within SampleID
-prop_data[, freq := n / sum(n), by = .(SampleID)]
+                  by = .(SampleID2, gt_line, Age, Protocol, Celltype, Age_line, neural_induction_media)]
+# Compute frequencies within SampleID2
+prop_data[, freq := n / sum(n), by = .(SampleID2)]
 
 # -----------------------------
 # 2. Filter out unwanted classes
@@ -74,8 +74,8 @@ stopifnot(!anyNA(prop_data$Protocol))
 # -----------------------------
 fig2ac_theme <- theme_ipsum() +
   theme(
-    axis.text.x = element_text(size = 16, angle = 45, hjust = 1),
-    axis.text.y = element_text(size = 16, margin = margin(r = 5)),
+    axis.text.x = element_text(size = 25, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 25, margin = margin(r = 5)),
     axis.title.x = element_text(size = 18, face = "bold", margin = margin(t = 10)),
     axis.title.y = element_text(size = 18, face = "bold", margin = margin(r = 18)),
     strip.text.x = element_text(size = 20, face = "bold"),
@@ -135,9 +135,9 @@ p_s1 <- ggplot(data2, aes(fill = Phase, y = freq, x = Phase_Celltype)) +
   ylab("Frequency (sqrt scale)") +
   RotatedAxis() +
   scale_x_discrete(expand = expansion(mult = c(0.2, 0.2)))
-ggsave("~/project/IPSC_2025_Data/Supplementary_Figure_1.tiff",
+ggsave("~/project/IPSC_2025_Data/Supplementary_Figure_1.png",
        plot = p_s1,
-       device = "tiff",
+       device = "png",
        width = 20, height = 20, dpi = 300)
 
 #Figure 2c
@@ -254,6 +254,144 @@ p3 <- ggplot(
   )
 p3
 
+# ===========================================================================
+# ALTERNATIVE STAT-TEST VERSIONS OF FIGURE 2c (t-test and Wilcoxon), each
+# showing */ns significance labels for ALL panels.
+#
+# NOTE ON TEST CHOICE: "Mann-Whitney U" and "Wilcoxon rank-sum" are the SAME
+# test (wilcox.test on two independent groups) - there is no separate,
+# less-sample-size-sensitive option between them. The genuinely different
+# alternative is the parametric t-test, which (unlike the rank-sum test)
+# CAN reach p < 0.05 at n=3 vs n=3. Both alternatives below use BH
+# correction, matching the rest of Figure 2.
+# ===========================================================================
+
+make_fig2c <- function(test = c("wilcox", "t"), label_type = c("signif", "exact")) {
+  test <- match.arg(test)
+  label_type <- match.arg(label_type)
+  
+  valid_panels <- ICC_long %>%
+    group_by(Age_line, Marker) %>%
+    summarise(n_groups = n_distinct(Protocol), .groups = "drop") %>%
+    filter(n_groups == 2)
+  
+  base <- ICC_long %>%
+    inner_join(valid_panels, by = c("Age_line", "Marker")) %>%
+    group_by(Age_line, Marker)
+  
+  st <- if (test == "wilcox") {
+    base %>% rstatix::wilcox_test(Percent ~ Protocol)
+  } else {
+    base %>% rstatix::t_test(Percent ~ Protocol)
+  }
+  st <- st %>%
+    rstatix::adjust_pvalue(method = "BH") %>%
+    rstatix::add_significance("p.adj") %>%
+    mutate(p.label = paste0("p = ", formatC(p.adj, format = "f", digits = 2)))
+  
+  y_positions <- ICC_long %>%
+    group_by(Age_line, Marker) %>%
+    summarise(y.position = max(Percent) * 1.10, .groups = "drop")
+  st_full <- st %>% left_join(y_positions, by = c("Age_line", "Marker"))
+  
+  lab <- if (label_type == "signif") "p.adj.signif" else "p.label"
+  test_name <- if (test == "wilcox") "Wilcoxon rank-sum (= Mann-Whitney U)" else "t-test"
+  
+  ggplot(ICC_long, aes(x = Marker, y = Percent, fill = Protocol)) +
+    geom_boxplot(width = 1, outlier.size = 1.5, color = "black",
+                 position = position_dodge(width = 0.8)) +
+    stat_pvalue_manual(st_full, label = lab, x = "Marker",
+                       position = position_dodge(width = 0.8),
+                       y.position = "y.position", tip.length = 0.01,
+                       size = 8, bracket.size = 0.5, inherit.aes = FALSE) +
+    scale_fill_viridis_d(option = "E", end = 0.9) +
+    facet_wrap(~Age_line, scales = "fixed") +
+    fig2ac_theme +
+    labs(x = "Marker", y = "Percent Positive Cells",
+         title = paste0("ICC: -SDF vs +SDF (", test_name, ", ", label_type, ") by Marker and Age × Line"))
+}
+
+# t-test version with */ns stars (the alternative you'd revert to for 2c)
+p3_ttest_signif <- make_fig2c(test = "t", label_type = "signif")
+ggsave("~/project/Figure2c_ttest_signif.png",
+       plot = p3_ttest_signif, device = "png", width = 20, height = 20, dpi = 300)
+
+# Wilcoxon version with */ns stars (for completeness / comparison)
+p3_wilcox_signif <- make_fig2c(test = "wilcox", label_type = "signif")
+ggsave("~/project/Figure2c_wilcox_signif.png",
+       plot = p3_wilcox_signif, device = "png", width = 20, height = 20, dpi = 300)
+
+# ===========================================================================
+# POWER ANALYSIS FOR FIGURE 2c NON-PARAMETRIC TEST
+#
+# Purpose: justify to reviewers what sample size WOULD be needed to detect
+# significance with a non-parametric (Wilcoxon rank-sum / Mann-Whitney U)
+# test in these comparisons - supporting the decision to use a t-test for
+# 2c while keeping Wilcoxon for the better-powered Figure 2e.
+#
+# Approach: the Wilcoxon rank-sum test has no simple closed-form power
+# formula, so we (a) estimate the standardized effect size (Cohen's d) from
+# the observed -SDF vs +SDF data per panel, then (b) use the asymptotic
+# relative efficiency (ARE) adjustment - the Wilcoxon test needs ~1/0.955 =
+# 1.047x the t-test's sample size under normality (Pitman ARE = 3/pi). We
+# compute the t-test n per group via pwr, then inflate by the ARE factor to
+# approximate the Wilcoxon requirement. This is the standard practical way
+# to size a Wilcoxon test.
+# ===========================================================================
+suppressPackageStartupMessages(library(pwr))
+
+ARE_WILCOX_NORMAL <- pi / 3   # ~1.047; Wilcoxon n = t-test n * (pi/3) under normality
+
+effect_sizes_2c <- ICC_long %>%
+  inner_join(valid_panels, by = c("Age_line", "Marker")) %>%
+  group_by(Age_line, Marker) %>%
+  summarise(
+    mean_minus = mean(Percent[Protocol == "-SDF"], na.rm = TRUE),
+    mean_plus  = mean(Percent[Protocol == "+SDF"], na.rm = TRUE),
+    sd_pooled  = sqrt(mean(c(
+      var(Percent[Protocol == "-SDF"], na.rm = TRUE),
+      var(Percent[Protocol == "+SDF"], na.rm = TRUE)
+    ), na.rm = TRUE)),
+    n_minus = sum(Protocol == "-SDF"),
+    n_plus  = sum(Protocol == "+SDF"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    cohens_d = abs(mean_minus - mean_plus) / sd_pooled,
+    # t-test n per group for 80% power at alpha=0.05 (two-sided)
+    n_per_group_ttest = mapply(function(d) {
+      if (!is.finite(d) || d == 0) return(NA_real_)
+      tryCatch(ceiling(pwr.t.test(d = d, sig.level = 0.05, power = 0.80,
+                                  type = "two.sample")$n),
+               error = function(e) NA_real_)
+    }, cohens_d),
+    # approximate Wilcoxon n per group via ARE inflation
+    n_per_group_wilcox = ceiling(n_per_group_ttest * ARE_WILCOX_NORMAL)
+  )
+
+# Save the power table for the reviewer response
+write.csv(effect_sizes_2c,
+          "~/project/IPSC_2025_Data/Figure2c_power_analysis.csv",
+          row.names = FALSE)
+
+# Visual summary: required Wilcoxon n per group vs observed effect size
+p_power_2c <- ggplot(effect_sizes_2c %>% filter(is.finite(cohens_d), !is.na(n_per_group_wilcox)),
+                     aes(x = cohens_d, y = n_per_group_wilcox)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_hline(yintercept = 3, linetype = "dashed", color = "firebrick") +
+  annotate("text", x = Inf, y = 3, label = "current n = 3", hjust = 1.1, vjust = -0.5,
+           color = "firebrick", size = 4) +
+  scale_y_log10() +
+  labs(
+    title = "Figure 2c power analysis: Wilcoxon/Mann-Whitney n per group needed for 80% power",
+    subtitle = "Each point = one Marker × Age×Line comparison; y on log scale. Points far above the n=3 line are underpowered for a rank-sum test.",
+    x = "Observed standardized effect size (Cohen's d, -SDF vs +SDF)",
+    y = "Required n per group (Wilcoxon, 80% power, α=0.05)"
+  ) +
+  theme_bw() + fig2ac_theme
+ggsave("~/project/IPSC_2025_Data/Figure2c_power_analysis.png",
+       plot = p_power_2c, device = "png", width = 14, height = 10, dpi = 300)
+
 # -----------------------------
 # Combine Figure 2a + 2c horizontally with ONE shared legend in the middle
 # -----------------------------
@@ -272,9 +410,9 @@ fig2_ac_combined <- cowplot::plot_grid(
   label_size = 20
 )
 
-ggsave("~/project/IPSC_2025_Data/Figure2_AC_combined.tiff",
+ggsave("~/project/IPSC_2025_Data/Figure2_AC_combined.png",
        plot = fig2_ac_combined,
-       device = "tiff",
+       device = "png",
        width = 26, height = 12, dpi = 300)
 
 
@@ -329,7 +467,8 @@ safe_ypos <- function(df) {
 
 cell_line_levels <- c("JHC1", "KOLF2.1J", "O2C3")
 
-build_fig2e_panel <- function(df_long) {
+build_fig2e_panel <- function(df_long, test = c("wilcox", "t")) {
+  test <- match.arg(test)
   
   df_long <- df_long %>%
     mutate(
@@ -347,10 +486,15 @@ build_fig2e_panel <- function(df_long) {
     )
   stopifnot(!anyNA(df_long$Protocol))
   
-  stats <- df_long %>%
+  stats_base <- df_long %>%
     filter(!is.na(Pct)) %>%
-    group_by(Cell.Line, Marker, Age) %>%
-    wilcox_test(Pct ~ Protocol) %>%
+    group_by(Cell.Line, Marker, Age)
+  stats <- if (test == "wilcox") {
+    stats_base %>% wilcox_test(Pct ~ Protocol)
+  } else {
+    stats_base %>% t_test(Pct ~ Protocol)
+  }
+  stats <- stats %>%
     adjust_pvalue(method = "BH") %>%
     add_significance("p.adj") %>%
     left_join(
@@ -408,6 +552,7 @@ df_long <- df1 %>%
     Marker = factor(Marker, levels = c("SATB2+","CTIP2+","SOX9+","KI67+"))
   )
 
+df_long_p1 <- df_long
 p5_1 <- build_fig2e_panel(df_long)
 
 ############################################
@@ -434,6 +579,7 @@ df_long <- df1 %>%
     Marker = factor(Marker, levels = c("SATB2+KI67+/SATB2+","CTIP2+KI67+/CTIP2+","SOX9+KI67+/SOX9+"))
   )
 
+df_long_p2 <- df_long
 p5_2 <- build_fig2e_panel(df_long)
 
 ############################################
@@ -458,6 +604,7 @@ df_long <- df2 %>%
     Marker = factor(Marker, levels = c("SATB2+","CTIP2+","SOX9+","KI67+"))
   )
 
+df_long_p3 <- df_long
 p5_3 <- build_fig2e_panel(df_long)
 
 ############################################
@@ -484,6 +631,7 @@ df_long <- df2 %>%
     Marker = factor(Marker, levels = c("SATB2+KI67+/SATB2+","CTIP2+KI67+/CTIP2+","SOX9+KI67+/SOX9+"))
   )
 
+df_long_p4 <- df_long
 p5_4 <- build_fig2e_panel(df_long)
 
 ############################################
@@ -506,9 +654,32 @@ p5 <- cowplot::plot_grid(
   label_size = 30
 )
 
-ggsave("~/project/IPSC_2025_Data/Figure2e.tiff",
+ggsave("~/project/IPSC_2025_Data/Figure2e_wilcox.png",
        plot = p5,
-       device = "tiff",
+       device = "png",
+       width = 28, height = 26, dpi = 300)
+
+# ---- Alternative Figure 2e using t-tests (parametric) instead of Wilcoxon ----
+# Provided so you can compare; 2e's larger n per group means Wilcoxon is
+# already reasonably powered here (unlike 2c), so Wilcoxon remains the
+# recommended default for 2e. Both show */ns significance labels.
+p5_1_t <- build_fig2e_panel(df_long_p1, test = "t")
+p5_2_t <- build_fig2e_panel(df_long_p2, test = "t")
+p5_3_t <- build_fig2e_panel(df_long_p3, test = "t")
+p5_4_t <- build_fig2e_panel(df_long_p4, test = "t")
+
+p5_t <- cowplot::plot_grid(
+  p5_1_t, p5_3_t,
+  p5_2_t, p5_4_t,
+  ncol = 2, nrow = 2,
+  align = "hv",
+  axis = "tblr",
+  labels = c("7W", "12W", "", ""),
+  label_size = 30
+)
+ggsave("~/project/IPSC_2025_Data/Figure2e_ttest.png",
+       plot = p5_t,
+       device = "png",
        width = 28, height = 26, dpi = 300)
 
 
@@ -604,14 +775,21 @@ df_long <- df %>%
 ### FUNCTION: Plot one cell line
 ############################################
 
-plot_cell_line <- function(data, cell_line_name) {
+plot_cell_line <- function(data, cell_line_name, test = c("wilcox", "t")) {
+  test <- match.arg(test)
   
   dl <- data %>% filter(Cell.Line == cell_line_name)
   
-  # Pairwise Wilcoxon: each protocol vs no3i_noTF (reference)
-  stats <- dl %>%
-    group_by(Marker) %>%
-    wilcox_test(Pct ~ Protocol, ref.group = "no3i_noTF") %>%
+  # Pairwise test: each protocol vs no3i_noTF (reference).
+  # NOTE: "Mann-Whitney U" and "Wilcoxon rank-sum" are the same test; the
+  # genuinely different alternative is the parametric t-test (test = "t").
+  stats_base <- dl %>% group_by(Marker)
+  stats <- if (test == "wilcox") {
+    stats_base %>% wilcox_test(Pct ~ Protocol, ref.group = "no3i_noTF")
+  } else {
+    stats_base %>% t_test(Pct ~ Protocol, ref.group = "no3i_noTF")
+  }
+  stats <- stats %>%
     adjust_pvalue(method = "BH") %>%
     add_significance("p.adj") %>%
     # Compute y positions above the tallest bar+SEM or data point
@@ -660,7 +838,7 @@ plot_cell_line <- function(data, cell_line_name) {
     stat_pvalue_manual(
       stats,
       label = "p.adj.signif",
-      xmin = "group1", xmax = "group2",
+      xmin = "group1", xmax = "group2", inherit.aes = FALSE,
       y.position = "y.position",
       size = 10,
       bracket.size = 1.2,
@@ -688,6 +866,24 @@ p_combined <- ggarrange(
   common.legend = TRUE, legend = "top"
 )
 
-ggsave("~/project/Supplemental_Figure4b.tiff",
-       plot = p_combined, device = "tiff",
+ggsave("~/project/Supplemental_Figure4b_wilcox.png",
+       plot = p_combined, device = "png",
+       width = 24, height = 28, dpi = 300)
+
+# ---- Alternative Supplemental Figure 4b using t-tests (parametric) ----
+# Same pairwise-vs-reference design, BH-adjusted, */ns labels. Provided so
+# reviewers can compare parametric vs rank-based results for these
+# 4-protocol comparisons.
+p_JHC1_t   <- plot_cell_line(df_long, "JHC1",    test = "t")
+p_O2C3_t   <- plot_cell_line(df_long, "O2C3",    test = "t")
+p_KOLF21_t <- plot_cell_line(df_long, "KOLF2.1", test = "t")
+
+p_combined_t <- ggarrange(
+  p_JHC1_t, p_O2C3_t, p_KOLF21_t,
+  ncol = 1, nrow = 3,
+  common.legend = TRUE, legend = "top"
+)
+
+ggsave("~/project/Supplemental_Figure4b_ttest.png",
+       plot = p_combined_t, device = "png",
        width = 24, height = 28, dpi = 300)
