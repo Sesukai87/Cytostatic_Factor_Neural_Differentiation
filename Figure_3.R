@@ -18,7 +18,6 @@ library(ggrepel)
 library(ggtext)
 library(cowplot)
 library(patchwork)
-library(scCustomize)
 
 # -----------------------------------------------------------------------
 # Shared print-legible theme, reused across every Figure 3/Supp panel
@@ -47,6 +46,10 @@ cell_lines <- levels(merged_IPSC$gt_line)
 
 
 Cortical_lineage <- subset(merged_IPSC, Celltype == "DL_ExN" | Celltype == "UL_ExN" | Celltype == "RG" | Celltype == "Astrocyte" | Celltype == "IPC_ExN")
+# Stamp original barcode before any downstream re-embedding/merging (for
+# consistency with the Hem branch; the Cortical barcodes happened to stay
+# matchable, but this makes the join in Figure_5.R robust for both).
+Cortical_lineage$orig_barcode <- colnames(Cortical_lineage)
 Cortical_lineage[["percent.lmx1a"]] <- PercentageFeatureSet(Cortical_lineage, pattern = "LMX1A")
 Cortical_lineage <- subset(Cortical_lineage, In_new_mod <= 0)
 add_to_hem <- subset(Cortical_lineage, percent.lmx1a > 0)
@@ -54,11 +57,11 @@ crn_to_hem <- subset(Cortical_lineage, CRN_new_mod > 0.5)
 Cortical_lineage <- subset(Cortical_lineage, percent.lmx1a == 0)
 Cortical_lineage <- subset(Cortical_lineage, CRN_new_mod <= 0.5)
 Cortical_lineage <- subset(Cortical_lineage, In_new_mod <= 0)
-Cortical_lineage <-  NormalizeData(Cortical_lineage) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>% RunHarmony(group.by.vars = c("SampleID")) %>% RunUMAP(reduction = "harmony", dims = 1:10, n.neighbors = 150, min.dist = 0.8, spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5, metric = "euclidean", seed.use = 42) %>%  FindNeighbors(reduction = "harmony", dims = 1:20)
+Cortical_lineage <-  NormalizeData(Cortical_lineage) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>% RunHarmony(group.by.vars = c("SampleID2")) %>% RunUMAP(reduction = "harmony", dims = 1:10, n.neighbors = 150, min.dist = 0.8, spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5, metric = "euclidean", seed.use = 42) %>%  FindNeighbors(reduction = "harmony", dims = 1:20)
 Cortical_lineage <- FindClusters(Cortical_lineage, res = 0.6)
 DimPlot(Cortical_lineage, group.by = "seurat_clusters", label = TRUE)
 DimPlot(Cortical_lineage, group.by = "Celltype")
-Cortical_lineage <- RenameIdents(Cortical_lineage, `0` = "UL_ExN", `1` = "UL_ExN", `2` = "A1 Astrocyte", `3` = "DL_ExN", `4` = "A1 Astrocyte", `5` = "RG", `6` = "RG", `7` = "RG", `8` = "A2 Astrocyte", `9` = "A2 Astrocyte", `10` = "UL_ExN", `11` = "RG", `12` = "UL_ExN", `13` = "A2 Astrocyte", `14` = "UL_ExN")
+Cortical_lineage <- RenameIdents(Cortical_lineage, `0` = "UL_ExN", `1` = "UL_ExN", `2` = "A1 Astrocyte", `3` = "UL_ExN", `4` = "DL_ExN", `5` = "A1 Astrocyte", `6` = "RG", `7` = "RG", `8` = "A2 Astrocyte", `9` = "A2 Astrocyte", `10` = "A2 Astrocyte", `11` = "RG", `12` = "UL_ExN", `13` = "A2 Astrocyte", `14` = "UL_ExN")
 Cortical_lineage$Celltype2 <- Idents(Cortical_lineage)
 Celltype1 <- as.character(Cortical_lineage$Celltype)
 Celltype2 <- as.character(Cortical_lineage$Celltype2)
@@ -66,18 +69,28 @@ names(Celltype1) <- colnames(Cortical_lineage)
 names(Celltype2) <- colnames(Cortical_lineage)
 consensusClusterLabels <- Celltype2
 table(consensusClusterLabels)
+consensusClusterLabels[names(which(Celltype2 == "A2 Astrocyte"))] <- "A2 Astrocyte"
+consensusClusterLabels[names(which(Celltype2 == "A1 Astrocyte"))] <- "A1 Astrocyte"
 consensusClusterLabels[names(which(Celltype1 == "Astrocyte" & Celltype2 == "RG"))] <- "A2 Astrocyte"
 consensusClusterLabels[names(which(Celltype1 == "Astrocyte" & Celltype2 == "UL_ExN"))] <- "A1 Astrocyte"
 consensusClusterLabels[names(which(Celltype1 == "Astrocyte" & Celltype2 == "DL_ExN"))] <- "A2 Astrocyte"
 table(consensusClusterLabels)
 Cortical_lineage$Celltype2 <- consensusClusterLabels
-consensusClusterLabels[names(which(Celltype1 == "IPC_ExN"))] <- "IPC_ExN"
-Cortical_lineage$Celltype <- consensusClusterLabels
-
 Cortical_lineage <- JoinLayers(Cortical_lineage)
 
 
 Hem_lineage <- subset(merged_IPSC, Celltype == "Epithelial" | Celltype == "Hem_RG" | Celltype == "CRN")
+# Stamp the ORIGINAL barcode (as it exists in merged_IPSC) into metadata
+# on every component object BEFORE the merge() below re-encodes the cell
+# names. merge() appends disambiguating suffixes that diverge from
+# merged_IPSC's barcode scheme, which later made it impossible to join
+# Hem-lineage pseudotime back onto merged_IPSC by barcode in Figure_5.R.
+# A metadata column survives subset()/merge() untouched, so this gives a
+# stable key. (add_to_hem / crn_to_hem are also merged in below, so they
+# need the stamp too - each is stamped with its own original barcodes.)
+Hem_lineage$orig_barcode <- colnames(Hem_lineage)
+add_to_hem$orig_barcode  <- colnames(add_to_hem)
+crn_to_hem$orig_barcode  <- colnames(crn_to_hem)
 # Get cell IDs
 cells_hem <- colnames(Hem_lineage)
 cells_add <- c(colnames(add_to_hem), colnames(crn_to_hem))
@@ -95,8 +108,7 @@ Hem_lineage_merged <- merge(Hem_lineage_merged, crn_to_hem_unique)
 Hem_lineage <- Hem_lineage_merged
 rm(Hem_lineage_merged)
 Hem_lineage <- subset(Hem_lineage, In_new_mod <= 0)
-Hem_lineage <- NormalizeData(Hem_lineage) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>% RunHarmony(group.by.vars = c("SampleID")) %>% RunUMAP(reduction = "harmony", dims = 1:5, n.neighbors = 150, min.dist = 0.8, spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5, metric = "euclidean", seed.use = 42) %>%  FindNeighbors(reduction = "harmony", dims = 1:5) %>% FindClusters(res = 0.6)
-Hem_lineage <- SetIdent(Hem_lineage, value = "seurat_clusters")
+Hem_lineage <- NormalizeData(Hem_lineage) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>% RunHarmony(group.by.vars = c("SampleID2")) %>% RunUMAP(reduction = "harmony", dims = 1:5, n.neighbors = 150, min.dist = 0.8, spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5, metric = "euclidean", seed.use = 42) %>%  FindNeighbors(reduction = "harmony", dims = 1:5) %>% FindClusters(res = 0.6)
 Hem_lineage <- RenameIdents(Hem_lineage, `0` = "Hem_RG", `1` = "Hem_RG", `2` = "Epithelial", `3` = "Hem_RG", `4` = "CRN", `5` = "Hem_RG", `6` = "Hem_RG", `7` = "Hem_RG", `8` = "CRN", `9` = "Hem_RG", `10` = "Hem_RG", `11` = "Hem_RG", `12` = "Hem_RG", `13` = "Epithelial")
 Hem_lineage$Celltype2 <- Idents(Hem_lineage)
 Celltype1 <- as.character(Hem_lineage$Celltype)
@@ -107,11 +119,9 @@ consensusClusterLabels <- Celltype1
 table(consensusClusterLabels)
 consensusClusterLabels[names(which(Celltype1 == "RG"))] <- "Hem_RG"
 consensusClusterLabels[names(which(Celltype1 == "IPC_ExN"))] <- "Hem_RG"
-consensusClusterLabels[names(which(Celltype1 == "Astrocyte"))] <- "Hem_RG"
 consensusClusterLabels[names(which(Celltype1 == "UL_ExN"))] <- "CRN"
 consensusClusterLabels[names(which(Celltype1 == "DL_ExN"))] <- "CRN"
 Hem_lineage$Celltype2 <- consensusClusterLabels
-Hem_lineage$Celltype <- consensusClusterLabels
 stripped <- sub("#4$", "", colnames(Hem_lineage))
 keep <- !duplicated(stripped)
 Hem_lineage <- Hem_lineage[, keep]
@@ -130,8 +140,6 @@ saveRDS(Hem_lineage, "~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages"
 # Celltype2 clustering above are computed once on the full IPSC-derived set
 # (that clustering doesn't change per line), but we now SPLIT the object by
 # gt_line before anything comparative happens.
-
-cell_lines <- levels(Cortical_lineage$gt_line)
 Cortical_lineage_list <- lapply(cell_lines, function(cl) subset(Cortical_lineage, gt_line == cl))
 names(Cortical_lineage_list) <- cell_lines
 Hem_lineage_list <- lapply(cell_lines, function(cl) subset(Hem_lineage, gt_line == cl))
@@ -139,6 +147,7 @@ names(Hem_lineage_list) <- cell_lines
 
 saveRDS(Cortical_lineage_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line")
 saveRDS(Hem_lineage_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line")
+
 
 # -----------------------------------------------------------------------
 # Figure 3a: partition UMAPs, per cell line x Protocol, combined into ONE
@@ -152,7 +161,7 @@ fig3a_panels <- list()
 cort_line_umap_list <- list()
 hem_line_umap_list  <- list()
 for (cl in cell_lines) {
-  
+
   # Build a clean per-cell-line object and compute a FRESH UMAP embedding
   # for THIS cell line only (rather than reusing the pooled embedding). The
   # two protocols within a line still share this line's embedding, but each
@@ -169,11 +178,11 @@ for (cl in cell_lines) {
   )
   cort_line_obj <- cort_line_obj %>%
     NormalizeData() %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>%
-    RunHarmony(group.by.vars = c("SampleID")) %>%
+    RunHarmony(group.by.vars = c("SampleID2")) %>%
     RunUMAP(reduction = "harmony", dims = 1:10, n.neighbors = 150, min.dist = 0.8,
             spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5,
             metric = "euclidean", seed.use = 42)
-  
+
   hem_obj_src <- Hem_lineage_list[[cl]]
   hem_line_obj <- CreateSeuratObject(
     counts = LayerData(hem_obj_src, assay = "RNA", layer = "counts"),
@@ -181,14 +190,15 @@ for (cl in cell_lines) {
   )
   hem_line_obj <- hem_line_obj %>%
     NormalizeData() %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>%
-    RunHarmony(group.by.vars = c("SampleID")) %>%
+    RunHarmony(group.by.vars = c("SampleID2")) %>%
     RunUMAP(reduction = "harmony", dims = 1:5, n.neighbors = 150, min.dist = 0.8,
             spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5,
             metric = "euclidean", seed.use = 42)
-  
+
   # stash for reuse in later figures (Supp Fig 5)
   cort_line_umap_list[[cl]] <- cort_line_obj
   hem_line_umap_list[[cl]]  <- hem_line_obj
+
   # Build panels in a FIXED column order for each row (cell line):
   # Pallial -SDF, Pallial +SDF, Hem -SDF, Hem +SDF
   protocol_order <- c("minus", "plus")
@@ -197,12 +207,12 @@ for (cl in cell_lines) {
     list(name = "Pallial", obj = cort_line_obj),
     list(name = "Hem",     obj = hem_line_obj)
   )
-  
+
   for (lin in lineage_order) {
     for (prot in protocol_order) {
       sub_obj <- subset(lin$obj, Protocol == prot)
       prot_label <- protocol_labels[[prot]]
-      
+
       # Guard against empty subsets (e.g. a cell line with no cells for
       # this Protocol in one of the lineages) - DimPlot errors on 0-cell
       # objects, so we substitute a blank placeholder panel instead of
@@ -216,7 +226,7 @@ for (cl in cell_lines) {
           ggtitle(paste0(cl, " | ", lin$name, " | ", prot_label)) +
           big_text_theme + theme(plot.title = element_text(size = 14))
       }
-      
+
       fig3a_panels[[paste(cl, lin$name, prot, sep = "_")]] <- p
     }
   }
@@ -224,18 +234,20 @@ for (cl in cell_lines) {
 # 4 columns (Pallial -SDF, Pallial +SDF, Hem -SDF, Hem +SDF) x N cell-line rows
 combined_plot <- wrap_plots(fig3a_panels, ncol = 4)
 ggsave(
-  "~/project/Figure3a_Dimplot_Celltype_Combined.png",
+  "~/project/IPSC_2025_Data/Figure3a_Dimplot_Celltype_Combined.tiff",
   plot = combined_plot,
-  device = "png",
+  device = "tiff",
   width = 24, height = 6 * length(cell_lines), dpi = 300, limitsize = FALSE
 )
 
-# -----------------------------------------------------------------------
-# Supplemental Figure 5: faceted FeaturePlots of the 4 markers, shown on
-# EACH cell line's own UMAP embedding (the per-cell-line embeddings built
-# and stored in the Figure 3a loop above), rather than a single pooled
-# embedding. Layout: rows = cell line, columns = feature.
-# -----------------------------------------------------------------------
+# Persist the FRESH per-cell-line UMAP-embedded objects (built in the loop
+# above) so downstream scripts - Figure_4.R (Slingshot, WGCNA) and beyond -
+# use the SAME per-line embeddings that Figure 3a itself visualizes, rather
+# than the older pooled-embedding-then-subset objects saved earlier. This
+# is what keeps Figure 3 and Figure 4's UMAP-dependent analyses consistent.
+saveRDS(cort_line_umap_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_umap")
+saveRDS(hem_line_umap_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_umap")
+
 # -----------------------------------------------------------------------
 # Supplemental Figure 5: faceted FeaturePlots of the 4 markers, shown on
 # EACH cell line's own UMAP embedding (the per-cell-line embeddings built
@@ -275,9 +287,9 @@ s5_rows <- lapply(cell_lines, function(cl) {
 # stack the per-cell-line rows vertically into one combined figure
 p_s5 <- wrap_plots(s5_rows, ncol = 1)
 ggsave(
-  "~/project/Supplmentary_Figure5.png",
+  "~/project/IPSC_2025_Data/Supplmentary_Figure5.tiff",
   plot = p_s5,
-  device = "png",
+  device = "tiff",
   width = 5 * length(s5_features),
   height = 5 * length(cell_lines),
   dpi = 300, limitsize = FALSE
@@ -298,7 +310,7 @@ res_proc_list <- list()
 res_df_list   <- list()
 
 for (cl in cell_lines) {
-  
+
   # Build clean, counts-only objects before merging - scale.data in the
   # source objects only covers each lineage's own variable features (a
   # different gene set for Cortical vs Hem), so merging with scale.data
@@ -312,7 +324,7 @@ for (cl in cell_lines) {
     counts = LayerData(Hem_lineage_list[[cl]], assay = "RNA", layer = "counts"),
     meta.data = Hem_lineage_list[[cl]]@meta.data
   )
-  
+
   merged_temp <- merge(cort_counts_obj, hem_counts_obj)
   merged_temp <- JoinLayers(merged_temp)
   cnts <- merged_temp@assays$RNA@layers$counts
@@ -322,7 +334,7 @@ for (cl in cell_lines) {
   merged_temp <- NormalizeData(merged_temp)
   IPSC_sce <- as.SingleCellExperiment(merged_temp)
   rm(merged_temp)
-  
+
   IPSC_sce <- IPSC_sce[rowSums(assay(IPSC_sce, "counts") > 0) > 0, ]
   qc <- perCellQCMetrics(IPSC_sce)
   ol <- isOutlier(metric = qc$detected, nmads = 2, log = TRUE)
@@ -333,21 +345,21 @@ for (cl in cell_lines) {
                               sample_id = "SampleID",
                               verbose = FALSE
   )
-  
+
   # neural_induction_media added as a covariate here
   res.proc <- processAssays(pb, ~Protocol + Age + neural_induction_media, min.count = 5)
   res.dl   <- dreamlet(res.proc, ~Protocol + Age + neural_induction_media)
   res_mash <- run_mash(res.dl, coef = 'Protocolplus')
-  
+
   res_proc_list[[cl]] <- res.proc
   res_dl_list[[cl]]   <- res.dl
   res_mash_list[[cl]] <- res_mash
-  
+
   pm   <- get_pm(res_mash$model)
   genes <- rownames(pm)
   cells <- colnames(pm)
   lfsr <- get_lfsr(res_mash$model)
-  
+
   res_df <- expand.grid(
     Gene = genes,
     Celltype = cells,
@@ -376,12 +388,12 @@ for (cl in cell_lines) {
 res_df_all <- bind_rows(res_df_list)
 res_df_all$CellLine <- factor(res_df_all$CellLine, levels = cell_lines)
 
-#  -----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 # Figure 3b: volcano plots, faceted by Celltype x CellLine, ONE combined
 # figure across all cell lines
 # -----------------------------------------------------------------------
 plot_mash_volcano <- function(res_df, title = "mashr Volcano Plot") {
-  
+
   ypos_df <- res_df %>%
     group_by(Celltype, CellLine) %>%
     summarise(
@@ -391,7 +403,7 @@ plot_mash_volcano <- function(res_df, title = "mashr Volcano Plot") {
       ylab = ymin + 0.80 * (ymax - ymin),
       .groups = "drop"
     )
-  
+
   xpos_df <- res_df %>%
     group_by(Celltype, CellLine) %>%
     summarise(
@@ -403,7 +415,7 @@ plot_mash_volcano <- function(res_df, title = "mashr Volcano Plot") {
       xmin = ifelse(is.finite(xmin_raw), xmin_raw, 0),
       xmax = ifelse(is.finite(xmax_raw), xmax_raw, 0)
     )
-  
+
   counts <- res_df %>%
     group_by(Celltype, CellLine, direction) %>%
     summarise(n_sig = sum(sig), .groups = "drop") %>%
@@ -414,7 +426,7 @@ plot_mash_volcano <- function(res_df, title = "mashr Volcano Plot") {
       x_pos = ifelse(direction == "pos", xmax, xmin),
       hjust = ifelse(direction == "pos", 1.1, -0.1)
     )
-  
+
   ggplot(res_df, aes(x = logFC, y = -log10(adj.P.Val), color = color)) +
     # NS points: small and faint so they recede into the background.
     # Significant (red/blue) points: larger and more opaque so they stand
@@ -426,7 +438,7 @@ plot_mash_volcano <- function(res_df, title = "mashr Volcano Plot") {
     theme_bw(base_size = 20) +
     big_text_theme +
     theme(
-      axis.text = element_text(size = 25),
+      axis.text = element_text(size = 18),
       axis.title = element_text(size = 24, face = "bold"),
       strip.text = element_text(size = 22, face = "bold"),
       plot.title = element_text(size = 26, face = "bold")
@@ -441,7 +453,7 @@ plot_mash_volcano <- function(res_df, title = "mashr Volcano Plot") {
       aes(x = x_pos, y = ylab, label = paste0(n_sig, " gene(s)"), hjust = hjust),
       inherit.aes = FALSE,
       vjust = 0,
-      size = 10,
+      size = 6,
       fontface = "bold",
       label.size = 0,
       fill = alpha("white", 0.75),
@@ -461,9 +473,9 @@ pv <- plot_mash_volcano(res_df_all, title = "mashr Volcano Plot — Protocolplus
 # Reduced per-panel size (was 8x5in, producing a 64x15in canvas where
 # points/text became nearly invisible) - 6x6in per panel keeps the figure
 # more legible at normal zoom while still resolving each panel clearly.
-ggsave("~/project/Figure3b_DEG_volcano_plots.png",
+ggsave("~/project/IPSC_2025_Data/Figure3b_DEG_volcano_plots.tiff",
        plot = pv,
-       device = "png",
+       device = "tiff",
        width = 6 * length(unique(res_df_all$Celltype)),
        height = 6 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
@@ -557,20 +569,23 @@ neg_titled <- lapply(cell_lines, function(cl) {
 
 combined_pos <- plot_grid(plotlist = pos_titled, nrow = 1)
 combined_neg <- plot_grid(plotlist = neg_titled, nrow = 1)
-fig3c_combined <- plot_grid(combined_pos, combined_neg, ncol = 1, label_size = 18)
-ggsave("~/project/Figure3c_combined.png", plot = fig3c_combined, device = "png",
+fig3c_combined <- plot_grid(combined_pos, combined_neg, ncol = 1)
+ggsave("Figure3c_combined.tiff", plot = fig3c_combined, device = "tiff",
        width = 6 * length(cell_lines), height = 14, dpi = 300, limitsize = FALSE)
 
-
-"D:\Seth\Downloads\IPSC_2025_Data\Figure_Parts\Manuscript1\Figure3d_GO_BP_combined.png"
+# -----------------------------------------------------------------------
 # Figure 3d: gene-set enrichment (zenith), per cell line, combined
 # -----------------------------------------------------------------------
 # Gene sets for zenith gene-set enrichment (Gene Ontology BP/CC), loaded
 # once here since the original script referenced go.gs.bp/go.gs.cc without
 # ever defining them - these must have existed from an earlier interactive
 # session but weren't in the saved script.
-go.gs.cc <- get_GeneOntology("CC", to = "SYMBOL")
-go.gs.bp <- get_GeneOntology("BP", to = "SYMBOL")
+go.gs.bp <- zenith::get_GeneOntology(to = "BP", species = "human")
+go.gs.cc <- zenith::get_GeneOntology(to = "CC", species = "human")
+
+# -----------------------------------------------------------------------
+# Figure 3d: gene-set enrichment (zenith), per cell line, combined
+# -----------------------------------------------------------------------
 # -----------------------------------------------------------------------
 # Figure 3d: gene-set enrichment (zenith), per cell line, combined
 # -----------------------------------------------------------------------
@@ -594,7 +609,7 @@ go.gs.bp <- get_GeneOntology("BP", to = "SYMBOL")
 # line, so any union term's real value can be looked up later) AND the
 # vector of terms this cell line selected as its own top/bottom hits.
 zenith_prep <- function(df, ntop = 3, cell_line = "") {
-  
+
   df <- df %>%
     mutate(
       signed_score = if (all(c("delta", "se") %in% names(df))) {
@@ -605,7 +620,7 @@ zenith_prep <- function(df, ntop = 3, cell_line = "") {
       Geneset_wrapped = stringr::str_wrap(Geneset, width = 40),
       CellLine = cell_line
     )
-  
+
   # Term selection matching plotZenithResults(): per assay, take the top
   # `ntop` by tstat (most positive / Up) AND the bottom `ntop` by tstat
   # (most negative / Down), unioned across assays.
@@ -621,7 +636,7 @@ zenith_prep <- function(df, ntop = 3, cell_line = "") {
     ungroup() %>%
     pull(Geneset_wrapped) %>%
     unique()
-  
+
   # NOTE: full_df keeps ALL terms (not filtered to this line's selection),
   # so downstream we can pull the actual tstat of a term that was selected
   # by a DIFFERENT cell line - this is what fills in the previously-white
@@ -649,13 +664,13 @@ compute_global_term_order <- function(prepped_list) {
 # so a term that's a top hit elsewhere shows its real value here rather than
 # rendering blank/white.
 plot_zenith_heatmap <- function(prepped, global_term_order, title = "", zmax = NULL) {
-  
+
   plot_df <- prepped$full_df %>%
     filter(Geneset_wrapped %in% global_term_order)
   plot_df$Geneset_wrapped <- factor(plot_df$Geneset_wrapped, levels = global_term_order)
-  
+
   n_terms <- length(global_term_order)
-  
+
   # Symmetric color limits so white sits exactly at 0 and blue/red intensity
   # scale identically, matching zenith's limits = c(-zmax, zmax). If a zmax
   # is supplied (shared across all panels), use it so every panel has an
@@ -664,7 +679,7 @@ plot_zenith_heatmap <- function(prepped, global_term_order, title = "", zmax = N
   if (is.null(zmax)) {
     zmax <- max(abs(plot_df$signed_score), na.rm = TRUE)
   }
-  
+
   list(
     plot = ggplot(plot_df, aes(x = assay, y = Geneset_wrapped, fill = signed_score)) +
       geom_tile(color = "white", linewidth = 0.3) +
@@ -677,7 +692,7 @@ plot_zenith_heatmap <- function(prepped, global_term_order, title = "", zmax = N
       ggtitle(title) +
       theme_bw(base_size = 14) +
       theme(
-        axis.text.x = element_text(size = 20, angle = 45, hjust = 1, face = "bold"),
+        axis.text.x = element_text(size = 12, angle = 45, hjust = 1, face = "bold"),
         axis.text.y = element_text(size = 14),
         axis.title = element_blank(),
         plot.title = element_text(size = 16, face = "bold"),
@@ -697,7 +712,7 @@ for (cl in cell_lines) {
   df_gs_cc <- zenith_gsa(res_mash_list[[cl]], go.gs.cc)
   df_gs_bp$assay <- factor(df_gs_bp$assay, levels = desired_order)
   df_gs_cc$assay <- factor(df_gs_cc$assay, levels = desired_order)
-  
+
   zenith_bp_prepped[[cl]] <- zenith_prep(df_gs_bp, ntop = 3, cell_line = cl)
   zenith_cc_prepped[[cl]] <- zenith_prep(df_gs_cc, ntop = 3, cell_line = cl)
 }
@@ -737,16 +752,9 @@ fig3d_cc_combined <- wrap_plots(zenith_cc_plots, ncol = length(cell_lines))
 bp_height <- max(8, 0.35 * length(bp_global_order))
 cc_height <- max(8, 0.35 * length(cc_global_order))
 
-ggsave("~/project/Figure3d_GO_BP_combined.png", plot = fig3d_bp_combined, device = "png",
-       width = 10 * length(cell_lines), height = 35, dpi = 300, limitsize = FALSE)
-
-ggsave("Figure3d_GO_BP_combined.png", plot = fig3d_bp_combined, device = "png",
+ggsave("Figure3d_GO_BP_combined.tiff", plot = fig3d_bp_combined, device = "tiff",
        width = 10 * length(cell_lines), height = bp_height, dpi = 300, limitsize = FALSE)
-
-ggsave("~/project/Figure3d_GO_BP_combined.png", plot = fig3d_bp_combined, device = "png",
-       width = 10 * length(cell_lines), height = 35, dpi = 300, limitsize = FALSE)
-
-ggsave("Figure3d_GO_CC_combined.png", plot = fig3d_cc_combined, device = "png",
+ggsave("Figure3d_GO_CC_combined.tiff", plot = fig3d_cc_combined, device = "tiff",
        width = 10 * length(cell_lines), height = cc_height, dpi = 300, limitsize = FALSE)
 
 
@@ -835,18 +843,18 @@ run_block_de <- function(sub_obj, group_var, block_label) {
     error = function(e) NULL
   )
   if (is.null(pb)) return(NULL)
-  
+
   form <- as.formula(paste0("~", group_var))
   res.proc <- tryCatch(processAssays(pb, form, min.count = 5), error = function(e) NULL)
   if (is.null(res.proc)) return(NULL)
   res.dl <- tryCatch(dreamlet(res.proc, form), error = function(e) NULL)
   if (is.null(res.dl)) return(NULL)
-  
+
   # coefficient name is the non-reference level of group_var
   coef_names <- setdiff(colnames(coef(res.dl[[1]])), "(Intercept)")
   coef_use <- coef_names[grepl(group_var, coef_names)][1]
   if (is.na(coef_use)) return(NULL)
-  
+
   tt <- tryCatch(topTable(res.dl, coef = coef_use, number = Inf), error = function(e) NULL)
   if (is.null(tt)) return(NULL)
   # dreamlet::topTable returns an S4 DFrame (S4Vectors), which bind_rows()
@@ -878,7 +886,7 @@ for (i in seq_len(nrow(both_media_blocks))) {
   cl_i  <- both_media_blocks$gt_line[i]
   age_i <- both_media_blocks$Age[i]
   block_label <- paste0(cl_i, "_D", age_i)
-  
+
   sub_obj <- subset(merged_all, gt_line == cl_i & Age == age_i)
   # relevel media so KSR is reference -> coefficient is "E6 vs KSR"
   sub_obj$neural_induction_media <- factor(sub_obj$neural_induction_media,
@@ -930,18 +938,18 @@ robustness_list <- list()
 for (cl in cell_lines) {
   res.proc <- res_proc_list[[cl]]
   res.dl_adj <- res_dl_list[[cl]]   # already fit with media covariate
-  
+
   # unadjusted fit on the SAME processed pseudobulk (identical gene/celltype
   # sets), so logFCs are directly comparable per gene x celltype
   res.dl_unadj <- tryCatch(dreamlet(res.proc, ~Protocol + Age), error = function(e) NULL)
   if (is.null(res.dl_unadj)) next
-  
+
   tt_adj <- tryCatch(as.data.frame(topTable(res.dl_adj, coef = "Protocolplus", number = Inf)),
                      error = function(e) NULL)
   tt_unadj <- tryCatch(as.data.frame(topTable(res.dl_unadj, coef = "Protocolplus", number = Inf)),
                        error = function(e) NULL)
   if (is.null(tt_adj) || is.null(tt_unadj)) next
-  
+
   # normalize gene id column
   norm_ids <- function(tt) {
     if (!"gene" %in% names(tt)) tt$gene <- if ("ID" %in% names(tt)) tt$ID else rownames(tt)
@@ -949,7 +957,7 @@ for (cl in cell_lines) {
     tt
   }
   tt_adj <- norm_ids(tt_adj); tt_unadj <- norm_ids(tt_unadj)
-  
+
   merged_fc <- inner_join(
     tt_unadj %>% dplyr::select(assay, gene, logFC_unadj = logFC),
     tt_adj   %>% dplyr::select(assay, gene, logFC_adj = logFC),
@@ -970,7 +978,7 @@ if (nrow(robustness_df) > 0) {
       .groups = "drop"
     ) %>%
     mutate(label = paste0("r = ", sprintf("%.3f", r)))
-  
+
   pC <- ggplot(robustness_df, aes(x = logFC_unadj, y = logFC_adj)) +
     geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
     geom_point(alpha = 0.25, size = 0.9) +
@@ -993,8 +1001,8 @@ fig_s6_combined <- pA / pB / pC +
   )
 
 ggsave(
-  "~/project/IPSC_2025_Data/Supplmentary_Figure6.png",
+  "~/project/IPSC_2025_Data/Supplmentary_Figure6.tiff",
   plot = fig_s6_combined,
-  device = "png",
+  device = "tiff",
   width = 22, height = 26, dpi = 300, limitsize = FALSE
 )
