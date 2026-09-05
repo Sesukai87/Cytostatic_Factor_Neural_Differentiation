@@ -43,8 +43,8 @@ big_text_theme <- theme(
 # consistent - each cell line gets its own independent embedding and
 # downstream trajectory/WGCNA analysis, matching Figure 3's approach.
 # -----------------------------------------------------------------------
-Cortical_lineage_list <- readRDS("~/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_umap")
-Hem_lineage_list <- readRDS("~/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_umap")
+Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_umap")
+Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_umap")
 cell_lines <- names(Cortical_lineage_list)
 
 # Result containers, keyed by cell line
@@ -159,14 +159,14 @@ for (cl in cell_lines) {
 # -----------------------------------------------------------------------
 fig4a_cort_combined <- wrap_plots(p_pseudotime_cort_list, ncol = 1) +
   plot_annotation(title = "Cortical Lineage By Slingshot Pseudotime, per Cell Line")
-ggsave("~/IPSC_2025_Data/Figure4a_cortical_pseudotime.png",
-       plot = fig4a_cort_combined, device = "png",
+ggsave("~/project/IPSC_2025_Data/Figure4a_cortical_pseudotime.tiff",
+       plot = fig4a_cort_combined, device = "tiff",
        width = 12, height = 10 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 fig4a_hem_combined <- wrap_plots(p_pseudotime_hem_list, ncol = 1) +
   plot_annotation(title = "Hem Lineage By Slingshot Pseudotime, per Cell Line")
-ggsave("~/IPSC_2025_Data/Figure4a_hem_pseudotime.png",
-       plot = fig4a_hem_combined, device = "png",
+ggsave("~/project/IPSC_2025_Data/Figure4a_hem_pseudotime.tiff",
+       plot = fig4a_hem_combined, device = "tiff",
        width = 10, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 
@@ -309,8 +309,8 @@ for (cl in cell_lines) {
 # so any future re-run of renaming/relabeling/replotting below can start
 # from this checkpoint instead of re-running the expensive construction.
 # -----------------------------------------------------------------------
-saveRDS(Cortical_lineage_list, "~/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
-saveRDS(Hem_lineage_list, "~/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
+saveRDS(Cortical_lineage_list, "~/project/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
+saveRDS(Hem_lineage_list, "~/project/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
 
 # =========================================================================
 # EVERYTHING BELOW THIS POINT IS FAST (renaming + plotting only) and can be
@@ -321,8 +321,8 @@ saveRDS(Hem_lineage_list, "~/IPSC_2025_Data/checkpoint_hem_modules_found_by_line
 # lines to reload the checkpoint saved above instead of re-running the
 # WGCNA construction loop:
 #
-# Cortical_lineage_list <- readRDS("~/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
-# Hem_lineage_list <- readRDS("~/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
+# Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
+# Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
 # cell_lines <- names(Cortical_lineage_list)
 # =========================================================================
 Cortical_lineage_list_org <- Cortical_lineage_list
@@ -522,11 +522,11 @@ for (cl in cell_lines) {
 }
 
 fig4b_cort_combined <- wrap_plots(p_kme_cort_list, ncol = 1)
-ggsave("~/IPSC_2025_Data/Figure_4b_cort.png",
+ggsave("~/project/IPSC_2025_Data/Figure_4b_cort.png",
        plot = fig4b_cort_combined, device = "png",
        width = 24, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
 fig4b_hem_combined <- wrap_plots(p_kme_hem_list, ncol = 1)
-ggsave("~/IPSC_2025_Data/Figure_4b_hem.png",
+ggsave("~/project/IPSC_2025_Data/Figure_4b_hem.png",
        plot = fig4b_hem_combined, device = "png",
        width = 20, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
@@ -544,35 +544,50 @@ for (cl in cell_lines) {
   Cortical_lineage <- Cortical_lineage_list[[cl]]
   Hem_lineage <- Hem_lineage_list[[cl]]
   
-  # extra_margin: wider horizontal margins + top margin. The r/l margins
-  # give the (long) facet strip module names room so their ends aren't
-  # clipped at the panel edges. strip_fix shrinks the strip text and lets
-  # it render outside the strip's nominal width without being cut off.
-  extra_margin <- theme(plot.margin = margin(t = 25, r = 25, b = 10, l = 25))
+  # extra_margin: uniform margins around each panel. strip_fix blanks the
+  # module facet labels (leaving the panels themselves) and enlarges the
+  # axis tick text. Both are applied AFTER big_text_theme in each panel's
+  # chain, and strip.text=element_blank() is repeated as a trailing theme()
+  # on each panel (below) so the S7/ggplot2-4.0 theme-merge can't un-blank
+  # it via big_text_theme's own strip.text setting.
+  extra_margin <- theme(plot.margin = margin(t = 15, r = 15, b = 10, l = 15))
+  #strip_fix <- theme(
+  #  strip.text = element_blank(),
+  #  strip.background = element_blank(),
+  #  axis.text = element_text(size = 25)   # enlarge x/y tick text on all Fig4c panels
+  #)
+  
   strip_fix <- theme(
-    strip.text = element_text(size = 13, face = "bold", margin = margin(t = 4, b = 4, l = 2, r = 2)),
-    strip.clip = "off"   # don't clip strip text to the strip's width
+    strip.text = element_text(size = 11),      # small, plain labels (no bold, no grey box)
+    strip.background = element_blank(),
+    axis.text = element_text(size = 18)
   )
   
-  p_dp <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("dp_pseudotime_plus_pseudotime", "dp_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = 7) +
-    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
-    ggtitle(paste0(cl, ": DP lineage eigengene")) + big_text_theme + extra_margin + strip_fix + NoLegend()
-  p_up <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("up_pseudotime_plus_pseudotime", "up_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = 7) +
-    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
-    ggtitle(paste0(cl, ": UP lineage eigengene")) + big_text_theme + extra_margin + strip_fix
-  p_A1 <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("A1_pseudotime_plus_pseudotime", "A1_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = 7) +
-    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
-    ggtitle(paste0(cl, ": A1 lineage eigengene")) + big_text_theme + extra_margin + strip_fix + NoLegend()
-  p_A2 <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("A2_pseudotime_plus_pseudotime", "A2_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = 7) +
-    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
-    ggtitle(paste0(cl, ": A2 lineage eigengene")) + big_text_theme + extra_margin + strip_fix
+  # Fixed facet columns for BOTH lineages so every module sub-panel is the
+  # same physical size regardless of Hem vs Pallial (Hem previously used
+  # ncol=5, Pallial ncol=7, which made their facets different sizes).
+  facet_ncol <- 7
+  blank_strip <- theme(strip.text = element_blank())   # trailing override (S7 merge-proof)
   
-  p_crn <- PlotModuleTrajectory(Hem_lineage, pseudotime_col = c("crn_pseudotime_plus_pseudotime", "crn_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = 5) +
+  p_dp <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("dp_pseudotime_plus_pseudotime", "dp_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
     scale_color_manual(values = protocol_colors, labels = protocol_labels) +
-    ggtitle(paste0(cl, ": CRN lineage eigengene")) + big_text_theme + extra_margin + strip_fix
-  p_epi <- PlotModuleTrajectory(Hem_lineage, pseudotime_col = c("epi_pseudotime_plus_pseudotime", "epi_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = 5) +
+    ggtitle(paste0(cl, ": DP lineage eigengene")) + big_text_theme + extra_margin + strip_fix + NoLegend() + blank_strip
+  p_up <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("up_pseudotime_plus_pseudotime", "up_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
     scale_color_manual(values = protocol_colors, labels = protocol_labels) +
-    ggtitle(paste0(cl, ": Epithelial lineage eigengene")) + big_text_theme + extra_margin + strip_fix + NoLegend()
+    ggtitle(paste0(cl, ": UP lineage eigengene")) + big_text_theme + extra_margin + strip_fix + blank_strip
+  p_A1 <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("A1_pseudotime_plus_pseudotime", "A1_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": A1 lineage eigengene")) + big_text_theme + extra_margin + strip_fix + NoLegend() + blank_strip
+  p_A2 <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("A2_pseudotime_plus_pseudotime", "A2_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": A2 lineage eigengene")) + big_text_theme + extra_margin + strip_fix + blank_strip
+  
+  p_crn <- PlotModuleTrajectory(Hem_lineage, pseudotime_col = c("crn_pseudotime_plus_pseudotime", "crn_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": CRN lineage eigengene")) + big_text_theme + extra_margin + strip_fix + blank_strip
+  p_epi <- PlotModuleTrajectory(Hem_lineage, pseudotime_col = c("epi_pseudotime_plus_pseudotime", "epi_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": Epithelial lineage eigengene")) + big_text_theme + extra_margin + strip_fix + NoLegend() + blank_strip
   
   fig4c_cort_list[[cl]] <- (p_dp + p_up) / (p_A1 + p_A2)
   fig4c_hem_list[[cl]]  <- (p_crn + p_epi)
@@ -587,20 +602,20 @@ fig4c_cort_combined <- wrap_plots(fig4c_cort_list, ncol = 1, heights = fig4c_cor
     title = "Effect of Protocol on Cortical Lineage Modules, per Cell Line",
     theme = theme(plot.title = element_text(size = 24, face = "bold", margin = margin(b = 20, t = 10)))
   )
-ggsave("~/IPSC_2025_Data/Figure_4c_cort.png",
+ggsave("~/project/IPSC_2025_Data/Figure_4c_cort.png",
        plot = fig4c_cort_combined, device = "png",
        width = 30, height = 11 * sum(fig4c_cort_combined_heights) / length(cell_lines), dpi = 300, limitsize = FALSE)
 
 fig4c_hem_combined_heights <- sapply(cell_lines, function(cl) {
   n_mod <- length(hem_rename_maps[[cl]])
-  ceiling(n_mod / 5)   # 1 row-group (crn+epi), needing ceiling(n_mod/5) internal rows
+  ceiling(n_mod / 7)   # 1 row-group (crn+epi), same facet_ncol=7 as Pallial so facet size matches
 })
 fig4c_hem_combined <- wrap_plots(fig4c_hem_list, ncol = 1, heights = fig4c_hem_combined_heights) +
   plot_annotation(
     title = "Effect of Protocol on Hem Lineage Modules, per Cell Line",
     theme = theme(plot.title = element_text(size = 24, face = "bold", margin = margin(b = 20, t = 10)))
   )
-ggsave("~/IPSC_2025_Data/Figure_4c_hem.png",
+ggsave("~/project/IPSC_2025_Data/Figure_4c_hem.png",
        plot = fig4c_hem_combined, device = "png",
        width = 30, height = 11 * sum(fig4c_hem_combined_heights) / length(cell_lines), dpi = 300, limitsize = FALSE)
 
@@ -658,7 +673,7 @@ for (cl in cell_lines) {
     geom_point(aes(color = module), size = 3, data = subset(plot_df, sig_flag)) +
     geom_text(data = subset(plot_df, !sig_flag), aes(label = "×"), color = "black", size = 5, fontface = "bold") +
     facet_wrap(~ lineage, scales = "free_y") +
-    coord_cartesian(xlim = c(-4.5, 4.5)) +   # fixed x-scale, same across ALL cell lines (Pallial)
+    coord_cartesian(xlim = c(-4, 4)) +   # fixed x-scale, same across ALL cell lines (Pallial)
     theme_minimal(base_size = 14) +
     theme(strip.text = element_text(size = 16, face = "bold"), axis.text.y = element_text(size = 12), axis.text.x = element_text(size = 12),
           plot.title = element_text(size = 18, face = "bold", margin = margin(b = 12)),
@@ -697,17 +712,19 @@ for (cl in cell_lines) {
 }
 
 fig4d_cort_combined <- wrap_plots(fig4d_cort_list, ncol = 1)
-ggsave("~/IPSC_2025_Data/Figure_4d_cort_lineage.png",
-       plot = fig4d_cort_combined, device = "png",
-       width = 15, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
+ggsave("~/project/IPSC_2025_Data/Figure_4d_cort_lineage.tiff",
+       plot = fig4d_cort_combined, device = "tiff",
+       width = 8, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 fig4d_hem_combined <- wrap_plots(fig4d_hem_list, ncol = 1)
-ggsave("~/IPSC_2025_Data/Figure_4d_hem_lineage.png",
-       plot = fig4d_hem_combined, device = "png",
-       width = 15, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
+ggsave("~/project/IPSC_2025_Data/Figure_4d_hem_lineage.tiff",
+       plot = fig4d_hem_combined, device = "tiff",
+       width = 8, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 
 
+Cortical_lineage_list_org
+Hem_lineage_list_org
 
 # -----------------------------------------------------------------------
 # Supplementary Figure 7: Enrichr, per cell line, combined
@@ -766,17 +783,17 @@ for (cl in cell_lines) {
 }
 
 fig_s7_cort_combined <- wrap_plots(fig_s7_cort_list, ncol = 1)
-ggsave("~/IPSC_2025_Data/Supplmental_Figure7_pallial_lineages_2.png",
+ggsave("~/project/IPSC_2025_Data/Supplmental_Figure7_pallial_lineages_2.png",
        plot = fig_s7_cort_combined, device = "png",
        width = 10, height = 10 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 fig_s7_hem_combined <- wrap_plots(fig_s7_hem_list, ncol = 1)
-ggsave("~/IPSC_2025_Data/Supplmental_Figure7_hem_lineages_2.png",
-       plot = fig_s7_hem_combined, device = "png",
+ggsave("~/project/IPSC_2025_Data/Supplmental_Figure7_hem_lineages_2.png",
+       plot = fig_s7_hem_combined, device = "tiff",
        width = 10, height = 10 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 
 
 
-saveRDS(Cortical_lineage_list, "~/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_wgcna")
-saveRDS(Hem_lineage_list, "~/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_wgcna")
+saveRDS(Cortical_lineage_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_wgcna")
+saveRDS(Hem_lineage_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_wgcna")
