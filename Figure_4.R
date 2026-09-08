@@ -34,14 +34,14 @@ big_text_theme <- theme(
 )
 
 # -----------------------------------------------------------------------
-# Load PER-CELL-LINE objects produced in Figure_3.R. IMPORTANT: these are
+# Load PER-CELL-LINE objects produced in Figure_4.R. IMPORTANT: these are
 # the FRESHLY-RECOMPUTED per-cell-line UMAP embeddings (built and saved at
-# the end of the Figure 3a loop in Figure_3.R), NOT the earlier pooled-
+# the end of the Figure 4a loop in Figure_4.R), NOT the earlier pooled-
 # embedding-then-subset objects. Slingshot trajectory inference below
 # depends directly on UMAP coordinates, so using the same per-line
-# embeddings that Figure 3a itself visualizes keeps Figure 3 and Figure 4
+# embeddings that Figure 4a itself visualizes keeps Figure 4 and Figure 5
 # consistent - each cell line gets its own independent embedding and
-# downstream trajectory/WGCNA analysis, matching Figure 3's approach.
+# downstream trajectory/WGCNA analysis, matching Figure 4's approach.
 # -----------------------------------------------------------------------
 Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_umap")
 Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_umap")
@@ -115,7 +115,7 @@ for (cl in cell_lines) {
   Hem_lineage$UMAP1 <- Hem_lineage@reductions$umap@cell.embeddings[,1]
   Hem_lineage$UMAP2 <- Hem_lineage@reductions$umap@cell.embeddings[,2]
   
-  # Figure 4a panels for this cell line
+  # Figure 5a panels for this cell line
   p1 <- Cortical_lineage@meta.data %>%
     ggplot(aes(x=UMAP1, y=UMAP2, color=dp_pseudotime)) +
     ggrastr::rasterise(geom_point(size=1), dpi=500, scale=0.75) +
@@ -155,17 +155,17 @@ for (cl in cell_lines) {
 }
 
 # -----------------------------------------------------------------------
-# Figure 4a: ONE combined figure, one row per cell line
+# Figure 5a: ONE combined figure, one row per cell line
 # -----------------------------------------------------------------------
 fig4a_cort_combined <- wrap_plots(p_pseudotime_cort_list, ncol = 1) +
   plot_annotation(title = "Cortical Lineage By Slingshot Pseudotime, per Cell Line")
-ggsave("~/project/IPSC_2025_Data/Figure4a_cortical_pseudotime.tiff",
+ggsave("~/project/IPSC_2025_Data/Figure5a_cortical_pseudotime.tiff",
        plot = fig4a_cort_combined, device = "tiff",
        width = 12, height = 10 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 fig4a_hem_combined <- wrap_plots(p_pseudotime_hem_list, ncol = 1) +
   plot_annotation(title = "Hem Lineage By Slingshot Pseudotime, per Cell Line")
-ggsave("~/project/IPSC_2025_Data/Figure4a_hem_pseudotime.tiff",
+ggsave("~/project/IPSC_2025_Data/Figure5a_hem_pseudotime.tiff",
        plot = fig4a_hem_combined, device = "tiff",
        width = 10, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
@@ -242,7 +242,7 @@ plot_kme_custom <- function(obj, wgcna_name, n_hubs = 10, title = "") {
 }
 
 # -----------------------------------------------------------------------
-# Figure 4b: WGCNA modules, run SEPARATELY within each cell line
+# Figure 5b: WGCNA modules, run SEPARATELY within each cell line
 #
 # STAGE 1 (SLOW): module-finding. This is the expensive part - once it
 # completes, a checkpoint is saved below and everything after it can be
@@ -321,8 +321,32 @@ saveRDS(Hem_lineage_list, "~/project/IPSC_2025_Data/checkpoint_hem_modules_found
 # lines to reload the checkpoint saved above instead of re-running the
 # WGCNA construction loop:
 #
-# Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
-# Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
+
+print_top_go_terms <- function(obj, wgcna_name, database = "GO_Biological_Process_2023", n_terms = 8) {
+  et <- GetEnrichrTable(obj, wgcna_name = wgcna_name)
+  et %>%
+    filter(db == database, module != "grey") %>%
+    group_by(module) %>%
+    arrange(P.value, .by_group = TRUE) %>%
+    slice_head(n = n_terms) %>%
+    select(module, Term, P.value, Adjusted.P.value, Genes) %>%
+    ungroup()
+}
+
+for (cl in cell_lines) {
+  cl_wgcna <- paste0("trajectory_", cl)
+  
+  cat("\n\n==========", cl, ": Pallial ==========\n")
+  cort_top <- print_top_go_terms(Cortical_lineage_list[[cl]], cl_wgcna)
+  print(cort_top, n = Inf)
+  
+  cat("\n\n==========", cl, ": Hem ==========\n")
+  hem_top <- print_top_go_terms(Hem_lineage_list[[cl]], cl_wgcna)
+  print(hem_top, n = Inf)
+}
+
+Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
+Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
 # cell_lines <- names(Cortical_lineage_list)
 # =========================================================================
 Cortical_lineage_list_org <- Cortical_lineage_list
@@ -522,17 +546,17 @@ for (cl in cell_lines) {
 }
 
 fig4b_cort_combined <- wrap_plots(p_kme_cort_list, ncol = 1)
-ggsave("~/project/IPSC_2025_Data/Figure_4b_cort.png",
+ggsave("~/project/IPSC_2025_Data/Figure_5b_cort.png",
        plot = fig4b_cort_combined, device = "png",
        width = 24, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
 fig4b_hem_combined <- wrap_plots(p_kme_hem_list, ncol = 1)
-ggsave("~/project/IPSC_2025_Data/Figure_4b_hem.png",
+ggsave("~/project/IPSC_2025_Data/Figure_5b_hem.png",
        plot = fig4b_hem_combined, device = "png",
        width = 20, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 
 # -----------------------------------------------------------------------
-# Figure 4c: module eigengene trajectories, per cell line, combined
+# Figure 5c: module eigengene trajectories, per cell line, combined
 # -----------------------------------------------------------------------
 protocol_colors <- met.brewer("Lakota", n = 2, type = 'discrete')
 protocol_labels <- c("minus", "plus")
@@ -602,7 +626,7 @@ fig4c_cort_combined <- wrap_plots(fig4c_cort_list, ncol = 1, heights = fig4c_cor
     title = "Effect of Protocol on Cortical Lineage Modules, per Cell Line",
     theme = theme(plot.title = element_text(size = 24, face = "bold", margin = margin(b = 20, t = 10)))
   )
-ggsave("~/project/IPSC_2025_Data/Figure_4c_cort.png",
+ggsave("~/project/IPSC_2025_Data/Figure_5c_cort.png",
        plot = fig4c_cort_combined, device = "png",
        width = 30, height = 11 * sum(fig4c_cort_combined_heights) / length(cell_lines), dpi = 300, limitsize = FALSE)
 
@@ -615,13 +639,13 @@ fig4c_hem_combined <- wrap_plots(fig4c_hem_list, ncol = 1, heights = fig4c_hem_c
     title = "Effect of Protocol on Hem Lineage Modules, per Cell Line",
     theme = theme(plot.title = element_text(size = 24, face = "bold", margin = margin(b = 20, t = 10)))
   )
-ggsave("~/project/IPSC_2025_Data/Figure_4c_hem.png",
+ggsave("~/project/IPSC_2025_Data/Figure_5c_hem.png",
        plot = fig4c_hem_combined, device = "png",
        width = 30, height = 11 * sum(fig4c_hem_combined_heights) / length(cell_lines), dpi = 300, limitsize = FALSE)
 
 
 # -----------------------------------------------------------------------
-# Figure 4d: DME lollipop plots, per cell line, combined
+# Figure 5d: DME lollipop plots, per cell line, combined
 # -----------------------------------------------------------------------
 run_dme <- function(obj, lineage_col, lineage_value, label, wgcna_name) {
   group1 <- obj@meta.data %>% subset(.[[lineage_col]] == lineage_value & Protocol == "plus") %>% rownames()
@@ -712,12 +736,12 @@ for (cl in cell_lines) {
 }
 
 fig4d_cort_combined <- wrap_plots(fig4d_cort_list, ncol = 1)
-ggsave("~/project/IPSC_2025_Data/Figure_4d_cort_lineage.tiff",
+ggsave("~/project/IPSC_2025_Data/Figure_5d_cort_lineage.tiff",
        plot = fig4d_cort_combined, device = "tiff",
        width = 8, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 fig4d_hem_combined <- wrap_plots(fig4d_hem_list, ncol = 1)
-ggsave("~/project/IPSC_2025_Data/Figure_4d_hem_lineage.tiff",
+ggsave("~/project/IPSC_2025_Data/Figure_5d_hem_lineage.tiff",
        plot = fig4d_hem_combined, device = "tiff",
        width = 8, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
@@ -727,73 +751,196 @@ Cortical_lineage_list_org
 Hem_lineage_list_org
 
 # -----------------------------------------------------------------------
-# Supplementary Figure 7: Enrichr, per cell line, combined
+# Supplementary Figure 6: Enrichr, per cell line, combined
 # -----------------------------------------------------------------------
-theme_set(theme_cowplot())
-set.seed(12345)
-dbs <- c('GO_Biological_Process_2023','GO_Cellular_Component_2023','GO_Molecular_Function_2023')
 
-fig_s7_cort_list <- list()
-fig_s7_hem_list  <- list()
 
-for (cl in cell_lines) {
-  Cortical_lineage <- Cortical_lineage_list[[cl]]
-  Hem_lineage <- Hem_lineage_list[[cl]]
-  cl_wgcna <- paste0("trajectory_", cl)
-  
-  # NOTE: module factor levels/names are already correct (functional order,
-  # fancy display names) from the Stage 2 rename_modules_native() step - no
-  # re-leveling needed here. Manually feeding pallial_rename_maps/
-  # hem_rename_maps values into SetModules() at this point was the actual
-  # bug that corrupted the GO-term enrichment results: it set the module
-  # factor's `levels` to the DISPLAY name strings while the underlying
-  # VALUES were unrelated (already-renamed) strings, silently turning most
-  # gene-module assignments to NA, so RunEnrichr() ran on the wrong (mostly
-  # empty) gene sets for whichever modules didn't happen to survive that.
-  
-  # 2. Force the seed immediately before the function to lock in tie-breakers
-  #set.seed(12345)
-  Cortical_lineage <- RunEnrichr(Cortical_lineage, dbs = dbs, max_genes = 100, wgcna_name = cl_wgcna)
-  
-  #set.seed(12345)
-  Hem_lineage <- RunEnrichr(Hem_lineage, dbs = dbs, max_genes = 100, wgcna_name = cl_wgcna)
-  
-  # 3. Plot - x-axis order comes directly from the object's own (already
-  # correctly-ordered, correctly-named) module levels; no relabeling needed.
-  cort_order <- setdiff(levels(GetModules(Cortical_lineage, wgcna_name = cl_wgcna)$module), "grey")
-  hem_order  <- setdiff(levels(GetModules(Hem_lineage, wgcna_name = cl_wgcna)$module), "grey")
-  
-  fig_s7_cort_list[[cl]] <- EnrichrDotPlot(
-    Cortical_lineage, mods = "all", database = "GO_Biological_Process_2023",
-    n_terms = 5, term_size = 8, p_adj = FALSE, wgcna_name = cl_wgcna
-  ) + 
-    scale_color_stepsn(colors = rev(viridis::magma(256))) + 
-    scale_x_discrete(limits = cort_order) +
-    ggtitle(paste0(cl, ": Cortical")) + 
-    big_text_theme
-  
-  fig_s7_hem_list[[cl]] <- EnrichrDotPlot(
-    Hem_lineage, mods = "all", database = "GO_Biological_Process_2023",
-    n_terms = 5, term_size = 8, p_adj = FALSE, wgcna_name = cl_wgcna
-  ) + 
-    scale_color_stepsn(colors = rev(viridis::magma(256))) + 
-    scale_x_discrete(limits = hem_order) +
-    ggtitle(paste0(cl, ": Hem")) + 
-    big_text_theme
+# NEW helper - insert just above build_supp_fig7_panel()
+build_original_order_table <- function(rename_map_cl) {
+  orig_names   <- names(rename_map_cl)
+  fancy_names  <- unname(rename_map_cl)
+  numeric_part <- as.numeric(sub(".*-M(\\d+)$", "\\1", orig_names))
+  ord <- order(numeric_part)
+  tibble(orig = orig_names[ord], fancy = fancy_names[ord])
 }
 
+# REPLACES the old build_supp_fig7_panel() definition
+build_supp_fig7_panel <- function(obj, cl_wgcna, order_table, category_lookup, title) {
+  module_order_fancy <- order_table$fancy
+  module_order_label <- order_table$orig
+  
+  dotplot <- EnrichrDotPlot(
+    obj, mods = "all", database = "GO_Biological_Process_2023",
+    n_terms = 5, term_size = 8, p_adj = FALSE, wgcna_name = cl_wgcna
+  ) +
+    scale_color_stepsn(colors = rev(viridis::magma(256))) +
+    scale_x_discrete(limits = module_order_fancy, labels = module_order_label) +
+    ggtitle(title) +
+    big_text_theme +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  strip <- plot_category_strip(module_order_fancy, category_lookup)
+  
+  dotplot / strip + plot_layout(heights = c(10, 1))
+}
+
+# REPLACES the old for-loop body (note the two new order_table lines)
+fig_s7_cort_list <- list()
+fig_s7_hem_list  <- list()
+for (cl in cell_lines) {
+  cl_wgcna <- paste0("trajectory_", cl)
+  
+  cort_order <- build_original_order_table(pallial_rename_maps[[cl]])
+  hem_order  <- build_original_order_table(hem_rename_maps[[cl]])
+  
+  fig_s7_cort_list[[cl]] <- build_supp_fig7_panel(
+    Cortical_lineage_list[[cl]], cl_wgcna, cort_order, module_categories_pallial, paste0(cl, ": Cortical")
+  )
+  fig_s7_hem_list[[cl]] <- build_supp_fig7_panel(
+    Hem_lineage_list[[cl]], cl_wgcna, hem_order, module_categories_hem, paste0(cl, ": Hem")
+  )
+}
+
+# ggsave() calls stay exactly as before - unchanged
 fig_s7_cort_combined <- wrap_plots(fig_s7_cort_list, ncol = 1)
-ggsave("~/project/IPSC_2025_Data/Supplmental_Figure7_pallial_lineages_2.png",
+ggsave("~/project/IPSC_2025_Data/Supplmental_Figure6_pallial_lineages.png",
        plot = fig_s7_cort_combined, device = "png",
-       width = 10, height = 10 * length(cell_lines), dpi = 300, limitsize = FALSE)
+       width = 10, height = 11 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 fig_s7_hem_combined <- wrap_plots(fig_s7_hem_list, ncol = 1)
-ggsave("~/project/IPSC_2025_Data/Supplmental_Figure7_hem_lineages_2.png",
-       plot = fig_s7_hem_combined, device = "tiff",
-       width = 10, height = 10 * length(cell_lines), dpi = 300, limitsize = FALSE)
+ggsave("~/project/IPSC_2025_Data/Supplmental_Figure6_hem_lineages.png",
+       plot = fig_s7_hem_combined, device = "png",
+       width = 10, height = 11 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 
+install.packages("ggalluvial")
+
+library(ggalluvial)
+library(ggfittext)
+library(patchwork)
+library(scales)
+library(stringr)
+library(purrr)
+library(tibble)
+library(dplyr)
+
+# =========================================================================
+# 1. Category lookup tables, keyed by the EXACT final module name.
+#    NOTE: several tags (M4-1/M4-2, M5-1/M5-2, M3-1..M3-4) are kept as
+#    DISTINCT categories rather than collapsed back to one base label -
+#    the enrichment showed these are genuinely different biology, not the
+#    same theme split at two intensities. Modules with no term below
+#    Adjusted P < 0.05 are labeled "weak enrichment" rather than given a
+#    confident biological name.
+# =========================================================================
+module_categories_pallial <- c(
+  "JHC1-Pallial-M1"     = "Translation",
+  "JHC1-Pallial-M2"     = "Cell cycle",
+  "JHC1-Pallial-M4-1"   = "Ciliogenesis",
+  "JHC1-Pallial-M4-2"   = "Axon/neurite outgrowth",
+  "JHC1-Pallial-M5"     = "Axon guidance & synapse activity",
+  "JHC1-Pallial-UM1"    = "Unique module",
+  
+  "KOLF2.1-Pallial-M1"    = "Translation",
+  "KOLF2.1-Pallial-M3"    = "Apical-basal polarity",
+  "KOLF2.1-Pallial-M5-1"  = "Axon guidance & development",
+  "KOLF2.1-Pallial-M5-2"  = "Synapse assembly & activity",
+  "KOLF2.1-Pallial-UM1"   = "Unique module (weak enrichment)",
+  "KOLF2.1-Pallial-UM2"   = "Unique module (immune-like)",
+  
+  "O2C3-Pallial-M1"    = "Translation",
+  "O2C3-Pallial-M2"    = "Cell cycle",
+  "O2C3-Pallial-M3"    = "Apical-basal polarity",
+  "O2C3-Pallial-M4"    = "Adhesion / planar polarity",
+  "O2C3-Pallial-M5-1"  = "Axon guidance & development",
+  "O2C3-Pallial-M5-2"  = "Synapse assembly & activity",
+  "O2C3-Pallial-UM1"   = "Unique module (lipid/immune)"
+)
+
+module_categories_hem <- c(
+  "JHC1-Hem-M1"   = "Translation",
+  "JHC1-Hem-M2"   = "Ciliogenesis",
+  "JHC1-Hem-M3"   = "Neuron differentiation",
+  "JHC1-Hem-UM1"  = "Unique module (weak enrichment)",
+  
+  "KOLF2.1-Hem-M1"    = "Translation",
+  "KOLF2.1-Hem-M2-1"  = "Ciliogenesis",
+  "KOLF2.1-Hem-M2-2"  = "Unique module (weak enrichment)",
+  "KOLF2.1-Hem-M3-1"  = "Neuron differentiation",
+  "KOLF2.1-Hem-M3-2"  = "Unique module (weak enrichment)",
+  "KOLF2.1-Hem-UM1"   = "Neuron differentiation (unmerged)",
+  
+  "O2C3-Hem-M1"    = "Translation",
+  "O2C3-Hem-M2"    = "Ciliogenesis",
+  "O2C3-Hem-M3-1"  = "Neuron differentiation",
+  "O2C3-Hem-M3-2"  = "Neuron differentiation",
+  "O2C3-Hem-M3-3"  = "Neuron differentiation (Wnt+)",
+  "O2C3-Hem-M3-4"  = "Neuron differentiation (Wnt-)",
+  "O2C3-Hem-UM1"   = "Unique module (interferon-like)"
+)
+
+all_categories <- unique(c(module_categories_pallial, module_categories_hem))
+category_colors <- setNames(scales::hue_pal()(length(all_categories)), all_categories)
+
+# =========================================================================
+# 2. Category strip - a thin colored bar under the dotplot's x-axis,
+#    mapping each module (in the SAME order as the dotplot) to its category
+# =========================================================================
+plot_category_strip <- function(module_order, category_lookup) {
+  strip_df <- tibble(
+    module = factor(module_order, levels = module_order),
+    Category = factor(category_lookup[module_order], levels = all_categories)
+  )
+  ggplot(strip_df, aes(x = module, y = 1, fill = Category)) +
+    geom_tile(height = 1, color = "white", linewidth = 0.3) +
+    scale_fill_manual(values = category_colors, drop = FALSE, name = "Category") +
+    scale_x_discrete(limits = module_order) +
+    theme_void() +
+    theme(legend.position = "bottom",
+          legend.text = element_text(size = 9),
+          plot.margin = margin(t = 0, r = 5, b = 5, l = 5))
+}
 
 
-saveRDS(Cortical_lineage_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_wgcna")
-saveRDS(Hem_lineage_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_wgcna")
+# =========================================================================
+# 3. Grouping-logic alluvial plot, using the refined per-module categories
+#    (joined against the rename maps you already have in your script)
+# =========================================================================
+build_module_grouping_df <- function(rename_maps, category_lookup, lineage_label) {
+  map_dfr(names(rename_maps), function(cl) {
+    m <- rename_maps[[cl]]
+    tibble(CellLine = cl, Lineage = lineage_label,
+           OldModule = names(m), NewModule = unname(m))
+  }) %>%
+    mutate(Category = category_lookup[NewModule])
+}
+
+pallial_grouping_df <- build_module_grouping_df(pallial_rename_maps, module_categories_pallial, "Pallial")
+hem_grouping_df     <- build_module_grouping_df(hem_rename_maps,     module_categories_hem,     "Hem")
+
+plot_module_grouping_alluvial <- function(df, title) {
+  df$Category <- factor(df$Category, levels = all_categories)
+  ggplot(df, aes(axis1 = CellLine, axis2 = OldModule, axis3 = Category)) +
+    geom_alluvium(aes(fill = Category), width = 1/4, alpha = 0.85) +
+    geom_stratum(width = 1/4, fill = "grey95", color = "grey30") +
+    geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3) +
+    scale_x_discrete(limits = c("Cell line", "Original module", "Functional category"),
+                     expand = c(0.08, 0.08)) +
+    scale_fill_manual(values = category_colors, drop = FALSE) +
+    labs(title = title, y = NULL) +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+          panel.grid = element_blank(), legend.position = "right",
+          legend.text = element_text(size = 8))
+}
+
+p_grouping_pallial <- plot_module_grouping_alluvial(pallial_grouping_df, "Pallial module grouping logic")
+p_grouping_hem     <- plot_module_grouping_alluvial(hem_grouping_df,     "Hem module grouping logic")
+
+fig_s7_grouping_combined <- p_grouping_pallial / p_grouping_hem +
+  plot_annotation(title = "Module renaming: original modules grouped by refined GO term theme")
+
+ggsave("~/project/IPSC_2025_Data/Supplmental_Figure6_grouping_logic.png",
+       plot = fig_s7_grouping_combined, device = "png",
+       width = 12, height = 12, dpi = 300, limitsize = FALSE)
+
