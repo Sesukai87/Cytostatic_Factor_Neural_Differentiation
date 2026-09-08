@@ -10,7 +10,7 @@ library(data.table)
 library(hrbrthemes)   # theme_ipsum()
 library(viridis)
 library(cowplot)      # get_legend(), plot_grid() with panel alignment
-library(ggh4x)        # guide_axis_nested() for the two-tier x-axis in Fig 2e
+library(ggh4x)        # guide_axis_nested() for the two-tier x-axis in Fig 3b
 
 #Figure 2a
 # -----------------------------
@@ -183,13 +183,13 @@ ICC_long <- ICC_long %>%
 stopifnot(!anyNA(ICC_long$Protocol))
 
 # Wilcoxon rank-sum test (standardized across all Fig 2 panels, matching
-# Figure 2e), with BH multiple-testing correction for consistency.
+# Figure 3b), with BH multiple-testing correction for consistency.
 valid_panels <- ICC_long %>%
   group_by(Age_line, Marker) %>%
   summarise(n_groups = n_distinct(Protocol), .groups = "drop") %>%
   filter(n_groups == 2)
 # Wilcoxon rank-sum test (standardized across all Fig 2 panels, matching
-# Figure 2e), with BH multiple-testing correction for consistency.
+# Figure 3b), with BH multiple-testing correction for consistency.
 #
 # NOTE ON INTERPRETATION: several Age_line x Marker panels have only n=3 per
 # Protocol group. A two-sided Wilcoxon rank-sum test with n=3 vs n=3 has only
@@ -327,7 +327,7 @@ ggsave("~/project/Figure2c_wilcox_signif.png",
 # Purpose: justify to reviewers what sample size WOULD be needed to detect
 # significance with a non-parametric (Wilcoxon rank-sum / Mann-Whitney U)
 # test in these comparisons - supporting the decision to use a t-test for
-# 2c while keeping Wilcoxon for the better-powered Figure 2e.
+# 2c while keeping Wilcoxon for the better-powered Figure 3b.
 #
 # Approach: the Wilcoxon rank-sum test has no simple closed-form power
 # formula, so we (a) estimate the standardized effect size (Cohen's d) from
@@ -416,7 +416,7 @@ ggsave("~/project/IPSC_2025_Data/Figure2_AC_combined.png",
        width = 26, height = 12, dpi = 300)
 
 
-#Figure2e
+#Figure3b
 
 ############################################
 ### UNIVERSAL THEME (NO CLIPPING, BIG TEXT, HORIZONTAL MARKER STRIPS)
@@ -467,7 +467,7 @@ safe_ypos <- function(df) {
 
 cell_line_levels <- c("JHC1", "KOLF2.1J", "O2C3")
 
-build_fig2e_panel <- function(df_long, test = c("wilcox", "t")) {
+build_fig3b_panel <- function(df_long, test = c("wilcox", "t")) {
   test <- match.arg(test)
   
   df_long <- df_long %>%
@@ -553,7 +553,7 @@ df_long <- df1 %>%
   )
 
 df_long_p1 <- df_long
-p5_1 <- build_fig2e_panel(df_long)
+p5_1 <- build_fig3b_panel(df_long)
 
 ############################################
 ### 7W: KI67 Double‑Positive Percentages
@@ -580,7 +580,7 @@ df_long <- df1 %>%
   )
 
 df_long_p2 <- df_long
-p5_2 <- build_fig2e_panel(df_long)
+p5_2 <- build_fig3b_panel(df_long)
 
 ############################################
 ### 12W: SATB2/CTIP2/SOX9/KI67 Percentages
@@ -605,7 +605,7 @@ df_long <- df2 %>%
   )
 
 df_long_p3 <- df_long
-p5_3 <- build_fig2e_panel(df_long)
+p5_3 <- build_fig3b_panel(df_long)
 
 ############################################
 ### 12W: KI67 Double‑Positive Percentages
@@ -632,7 +632,7 @@ df_long <- df2 %>%
   )
 
 df_long_p4 <- df_long
-p5_4 <- build_fig2e_panel(df_long)
+p5_4 <- build_fig3b_panel(df_long)
 
 ############################################
 ### 2×2 Combined Figure
@@ -642,7 +642,7 @@ p5_4 <- build_fig2e_panel(df_long)
 # outer bounding box), which is what was causing the stretching/distortion
 # when sub-panels had different facet-grid dimensions and axis label widths.
 # All four panels also now share identical facet scales/limits (set inside
-# build_fig2e_panel), so proportions are visually comparable across panels.
+# build_fig3b_panel), so proportions are visually comparable across panels.
 
 p5 <- cowplot::plot_grid(
   p5_1, p5_3,
@@ -654,19 +654,19 @@ p5 <- cowplot::plot_grid(
   label_size = 30
 )
 
-ggsave("~/project/IPSC_2025_Data/Figure2e_wilcox.png",
+ggsave("~/project/IPSC_2025_Data/Figure3b_wilcox.png",
        plot = p5,
        device = "png",
        width = 28, height = 26, dpi = 300)
 
-# ---- Alternative Figure 2e using t-tests (parametric) instead of Wilcoxon ----
-# Provided so you can compare; 2e's larger n per group means Wilcoxon is
+# ---- Alternative Figure 3b using t-tests (parametric) instead of Wilcoxon ----
+# Provided so you can compare; 3b's larger n per group means Wilcoxon is
 # already reasonably powered here (unlike 2c), so Wilcoxon remains the
-# recommended default for 2e. Both show */ns significance labels.
-p5_1_t <- build_fig2e_panel(df_long_p1, test = "t")
-p5_2_t <- build_fig2e_panel(df_long_p2, test = "t")
-p5_3_t <- build_fig2e_panel(df_long_p3, test = "t")
-p5_4_t <- build_fig2e_panel(df_long_p4, test = "t")
+# recommended default for 3b. Both show */ns significance labels.
+p5_1_t <- build_fig3b_panel(df_long_p1, test = "t")
+p5_2_t <- build_fig3b_panel(df_long_p2, test = "t")
+p5_3_t <- build_fig3b_panel(df_long_p3, test = "t")
+p5_4_t <- build_fig3b_panel(df_long_p4, test = "t")
 
 p5_t <- cowplot::plot_grid(
   p5_1_t, p5_3_t,
@@ -677,7 +677,7 @@ p5_t <- cowplot::plot_grid(
   labels = c("7W", "12W", "", ""),
   label_size = 30
 )
-ggsave("~/project/IPSC_2025_Data/Figure2e_ttest.png",
+ggsave("~/project/IPSC_2025_Data/Figure3b_ttest.png",
        plot = p5_t,
        device = "png",
        width = 28, height = 26, dpi = 300)
