@@ -92,17 +92,25 @@ rm(merged)
 unique(merged_IPSC$gt_line)
 merged_IPSC$gt_line <- droplevels(merged_IPSC$gt_line)
 cell_lines <- levels(merged_IPSC$gt_line)
-scenic_loom_path <- "~/project/IPSC_2025_Data/merged_IPSC_aucell.loom"
+scenic_loom_path <- "~/project/IPSC_2025_Data/SCENIC_Loom_Input/merged_IPSC_aucell.loom"
 merged_IPSC <- ImportPyscenicLoom(scenic_loom_path, seu = merged_IPSC)
 dim(merged_IPSC)
 dim(merged_IPSC@misc$SCENIC$RegulonsAUC)
 
 
-
-Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
-Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
-
-
+# -----------------------------------------------------------------------
+# IMPORTANT FIX: load the FINAL per-cell-line objects from Figure_6.R
+# (which include per-line Slingshot pseudotime, per-line WGCNA modules,
+# and per-line eigengenes), NOT the early pooled objects Figure_4.R saves
+# before any per-line splitting. The pooled objects never had per-line
+# pseudotime computed on them at all - Slingshot only runs, separately per
+# cell line, inside Figure_6.R's own loop. Using the pooled objects here
+# would source Fig5's lineage/pseudotime assignments from a stale,
+# inconsistent source relative to every other per-line analysis in this
+# pipeline (Fig4/Fig5).
+# -----------------------------------------------------------------------
+Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_wgcna")
+Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_wgcna")
 
 # Transfer metadata separately PER CELL LINE (barcodes are unique dataset-
 # wide, so matching by rowname still correctly routes each cell's own
@@ -112,7 +120,7 @@ for (cl in cell_lines) {
   Hem_lineage <- Hem_lineage_list[[cl]]
   
   # Match on the ORIGINAL barcode stamped into metadata (orig_barcode) in
-  # Figure_3.R BEFORE the subset+re-embed branches re-encoded cell names.
+  # Figure_5.R BEFORE the subset+re-embed branches re-encoded cell names.
   # The Cortical and Hem lineage objects are built via separate
   # subset+merge branches that append DIFFERENT disambiguating suffixes to
   # the cell names, so their barcodes no longer match merged_IPSC's (the
@@ -185,7 +193,7 @@ DefaultAssay(merged_IPSC_tf) <- "TF"
 merged_IPSC_tf@assays$RNA <- NULL
 
 # -----------------------------------------------------------------------
-# Figure 5a: Regulon differential "expression" (AUC), kept SEPARATE per
+# Figure 6a: Regulon differential "expression" (AUC), kept SEPARATE per
 # cell line rather than collapsed across gt_line (previous version grouped
 # by interaction(Age, gt_line) internally but then summarised away gt_line
 # entirely when collapsing to one row per Regulon x Lineage - i.e. results
@@ -287,7 +295,7 @@ counts_df <- res_df %>%
                         max(res_df$mean_log2FC, na.rm=TRUE) * 0.8,
                         min(res_df$mean_log2FC, na.rm=TRUE) * 0.8))
 
-# Figure 5a - volcano, one panel per cell line (facet by Lineage only
+# Figure 6a - volcano, one panel per cell line (facet by Lineage only
 # within each panel), combined via wrap_plots - matching the loop+combine
 # style used in Fig 4c/4d and Fig 5b/5c.
 fig5a_list <- list()
@@ -314,7 +322,7 @@ for (cl in cell_lines) {
     geom_text(
       data = counts_df_cl,
       aes(x = x_pos, y = y_pos, label = n, color = direction),
-      inherit.aes = FALSE, size = 10, fontface = "bold",
+      inherit.aes = FALSE, size = 15, fontface = "bold",
       show.legend = FALSE   # fixes legend showing a colored "a" glyph instead
       # of a dot - geom_text's color aes was being
       # merged into the same legend as geom_point's
@@ -341,12 +349,12 @@ for (cl in cell_lines) {
 }
 
 fig5a_combined <- wrap_plots(fig5a_list, ncol = 1)
-ggsave("~/project/IPSC_2025_Data/Figure5a.png",
-       plot = fig5a_combined, device = "png", bg = "white",
+ggsave("~/project/IPSC_2025_Data/Figure6a.tiff",
+       plot = fig5a_combined, device = "tiff", bg = "white",
        width = 6 * length(lineage_order), height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 
-#Figure 5b
+#Figure 6b
 merged_IPSC_tf$dp_lineage <- ifelse(!is.na(merged_IPSC_tf$dp_pseudotime), "dp_ExN_lineage", NA)
 merged_IPSC_tf$up_lineage <- ifelse(!is.na(merged_IPSC_tf$up_pseudotime), "up_ExN_lineage", NA)
 merged_IPSC_tf$A1_lineage <- ifelse(!is.na(merged_IPSC_tf$A1_pseudotime), "A1_Astrocyte_lineage", NA)
@@ -484,7 +492,7 @@ plot_auc_heatmap_lineage <- function(regulon_order, auc_df) {
   }
   
   # Column labels: "-SDF"/"+SDF" instead of "minus"/"plus", and the
-  # lineage codes translated to Figure 4's naming convention for
+  # lineage codes translated to Figure 5's naming convention for
   # consistency, blank for spacer columns (rather than "spacer_1", etc).
   # NOTE: this renaming is applied ONLY to the display labels here - the
   # `desired_order` used above for filtering/leveling must stay as the
@@ -563,109 +571,23 @@ shared_title <- ggdraw() +
 
 p_2 <- plot_grid(shared_title, heatmap_row, ncol = 1, rel_heights = c(0.08, 1))
 
-# NOTE: R's png() device has known quirks compositing transparency in
+# NOTE: R's tiff() device has known quirks compositing transparency in
 # nested grid/cowplot viewports - fully-NA heatmap regions rendered BLACK
-# instead of the specified na_col="white" when saved directly as png,
+# instead of the specified na_col="white" when saved directly as TIFF,
 # even though an isolated pheatmap test confirmed na_col works correctly
 # on its own. Saving as PNG first (which handles this correctly, verified
-# via that same isolated test) and converting to png afterward via
-# magick avoids the png() device's compositing issue entirely.
-png_path_5b <- "~/project/IPSC_2025_Data/Figure5b.png"
-png_path_5b <- "~/project/IPSC_2025_Data/Figure5b.png"
+# via that same isolated test) and converting to TIFF afterward via
+# magick avoids the tiff() device's compositing issue entirely.
+png_path_5b <- "~/project/IPSC_2025_Data/Figure6b.png"
+tiff_path_5b <- "~/project/IPSC_2025_Data/Figure6b.tiff"
 ggsave(png_path_5b,
        plot = p_2, device = "png", bg = "white",
        width = 10 * length(cell_lines), height = 20, dpi = 300, limitsize = FALSE)
-magick::image_write(magick::image_read(png_path_5b), path = png_path_5b, format = "png")
-
-
-
-# =========================================================================
-# STANDALONE DIAGNOSTIC (does not modify Figure_5.R): find regulons that
-# are "lineage_opposed" consistently across ALL 3 cell lines, split into
-# Pallial lineages (dp/up = neuron, A1/A2 = astrocyte) and Hem lineages
-# (crn = neuron, epi = epithelial). Recomputes cor_results2 per cell line
-# from scratch (same logic as the existing Fig5c loop) rather than
-# depending on anything the loop saved.
-# =========================================================================
-
-find_consistent_opposed <- function(df, lineage_group, group_label) {
-  n_lines_total <- n_distinct(df$gt_line)
-  
-  # 1. Check for consistent lineage_opposed
-  per_line_opposed <- df %>%
-    dplyr::filter(Pseudotime %in% lineage_group) %>%
-    dplyr::group_by(Regulon, gt_line) %>%
-    dplyr::summarise(
-      n_opposed = sum(color_group == "lineage_opposed", na.rm = TRUE),
-      n_tested  = dplyr::n(),
-      opposed_in_line = if (REQUIRE_ALL_LINEAGES) n_opposed == n_tested else n_opposed > 0,
-      .groups = "drop"
-    )
-  
-  consistent_opposed <- per_line_opposed %>%
-    dplyr::group_by(Regulon) %>%
-    dplyr::summarise(n_lines_opposed = sum(opposed_in_line), .groups = "drop") %>%
-    dplyr::filter(n_lines_opposed == n_lines_total) %>%
-    dplyr::pull(Regulon)
-  
-  # 2. Check for consistent lineage_aligned
-  per_line_aligned <- df %>%
-    dplyr::filter(Pseudotime %in% lineage_group) %>%
-    dplyr::group_by(Regulon, gt_line) %>%
-    dplyr::summarise(
-      n_aligned = sum(color_group == "lineage_aligned", na.rm = TRUE),
-      n_tested  = dplyr::n(),
-      aligned_in_line = if (REQUIRE_ALL_LINEAGES) n_aligned == n_tested else n_aligned > 0,
-      .groups = "drop"
-    )
-  
-  consistent_aligned <- per_line_aligned %>%
-    dplyr::group_by(Regulon) %>%
-    dplyr::summarise(n_lines_aligned = sum(aligned_in_line), .groups = "drop") %>%
-    dplyr::filter(n_lines_aligned == n_lines_total) %>%
-    dplyr::pull(Regulon)
-  
-  # Print results for both directions
-  cat("\n", group_label, "(", paste(lineage_group, collapse = ", "), ") - OPPOSED in all", n_lines_total, "cell lines:\n")
-  if (length(consistent_opposed) == 0) cat("  (none found)\n") else print(consistent_opposed)
-  
-  cat("\n", group_label, "(", paste(lineage_group, collapse = ", "), ") - ALIGNED in all", n_lines_total, "cell lines:\n")
-  if (length(consistent_aligned) == 0) cat("  (none found)\n") else print(consistent_aligned)
-  
-  # Return as a named list so downstream variables hold both directions
-  invisible(list(opposed = consistent_opposed, aligned = consistent_aligned))
-}
-
-cat("\n=== PALLIAL LINEAGES ===\n")
-# Capture the full list (both opposed and aligned) for neurons and astrocytes
-pallial_neuron_res    <- find_consistent_opposed(cor_results_all, pallial_neuron_lineages, "Pallial neuron")
-pallial_astrocyte_res <- find_consistent_opposed(cor_results_all, pallial_astrocyte_lineages, "Pallial astrocyte")
-
-# Find the specific intersections you are looking for
-neuron_aligned_astro_opposed <- intersect(pallial_neuron_res$aligned, pallial_astrocyte_res$opposed)
-neuron_opposed_astro_aligned <- intersect(pallial_neuron_res$opposed, pallial_astrocyte_res$aligned)
-
-# Print the final sets
-cat("\n=== DIVERGENT REGULONS (PALLIAL) ===\n")
-cat("Neuron-Aligned AND Astrocyte-Opposed:\n")
-if (length(neuron_aligned_astro_opposed) == 0) {
-  cat("  (none found)\n") 
-} else {
-  print(neuron_aligned_astro_opposed)
-}
-
-cat("\nNeuron-Opposed AND Astrocyte-Aligned:\n")
-if (length(neuron_opposed_astro_aligned) == 0) {
-  cat("  (none found)\n") 
-} else {
-  print(neuron_opposed_astro_aligned)
-}
-
-
+magick::image_write(magick::image_read(png_path_5b), path = tiff_path_5b, format = "tiff")
 
 
 # -----------------------------------------------------------------------
-# Figure 5c: regulon-pseudotime correlation, kept SEPARATE per cell line
+# Figure 6c: regulon-pseudotime correlation, kept SEPARATE per cell line
 # (previously run only on the "minus" subset pooled across all lines).
 # Consistent lineage labels applied, matching Panels A/B.
 # -----------------------------------------------------------------------
@@ -742,9 +664,8 @@ for (cl in cell_lines) {
   green_counts <- cor_results2 %>% dplyr::filter(is_green) %>% count(PseudotimeLabel, name = "n_green")
   red_counts   <- cor_results2 %>% dplyr::filter(is_red) %>% count(PseudotimeLabel, name = "n_red")
   
-  label_genes_epi_crn <- c("TCF7L1(+)", "SOX13(+)")
-  #label_genes_dp_up_A1_A2 <- c("POU3F1(+)", "STAT3(+)", "NFIA(+)", "NFIX(+)", "NFIC(+)")
-  label_genes_dp_up_A1_A2 <- c("POU3F1(+)", "E2F2(+)", "HMGA2(+)", "NFIX(+)", "NFIC(+)")
+  label_genes_epi_crn <- c("TCF7L1(+)", "OTX1(+)")
+  label_genes_dp_up_A1_A2 <- c("POU3F1(+)", "STAT3(+)", "NFIA(+)", "NFIX(+)", "NFIC(+)")
   
   is_first  <- cl == cell_lines[1]                    # JHC1
   is_middle <- cl == cell_lines[2]                     # KOLF2.1 - shared y-axis title
@@ -760,14 +681,14 @@ for (cl in cell_lines) {
                                Pseudotime %in% c("dp", "up", "A1", "A2")), color = "black", size = 2.5) +
     geom_text_repel(data = subset(cor_results_plot, Regulon %in% label_genes_dp_up_A1_A2 &
                                     Pseudotime %in% c("dp", "up", "A1", "A2")),
-                    aes(label = Regulon), size = 5.5, color = "black", max.overlaps = Inf,
+                    aes(label = Regulon), size = 6, color = "black", max.overlaps = Inf,
                     box.padding = 0.4, point.padding = 0.3, segment.color = "black",
                     segment.size = 0.4, min.segment.length = 0) +
     geom_point(data = subset(cor_results_plot, Regulon %in% label_genes_epi_crn &
                                Pseudotime %in% c("crn", "epi")), color = "black", size = 2.5) +
     geom_text_repel(data = subset(cor_results_plot, Regulon %in% label_genes_epi_crn &
                                     Pseudotime %in% c("crn", "epi")),
-                    aes(label = Regulon), size = 5.5, color = "black", max.overlaps = Inf,
+                    aes(label = Regulon), size = 6, color = "black", max.overlaps = Inf,
                     box.padding = 0.4, point.padding = 0.3, segment.color = "black",
                     segment.size = 0.4, min.segment.length = 0) +
     geom_text(data = green_counts, aes(x = -Inf, y = Inf, label = paste0("aligned = ", n_green)),
@@ -815,8 +736,8 @@ fig5c_combined <- plot_grid(
   fig5c_legend,
   ncol = 1, rel_heights = c(1, 0.06)
 )
-ggsave("~/project/IPSC_2025_Data/Figure5c.png",
-       plot = fig5c_combined, device = "png", bg = "white",
+ggsave("~/project/IPSC_2025_Data/Figure6c.tiff",
+       plot = fig5c_combined, device = "tiff", bg = "white",
        width = 24, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 # -----------------------------------------------------------------------
@@ -830,9 +751,9 @@ AC_stack <- cowplot::plot_grid(fig5a_combined, fig5c_combined, ncol = 1, rel_hei
                                labels = c("A", "C"), label_size = 24)
 fig5_final <- cowplot::plot_grid(AC_stack, p_2, nrow = 1, rel_widths = c(1, 1),
                                  labels = c("", "B"), label_size = 24)
-png_path_final <- "~/project/IPSC_2025_Data/Figure5_combined.png"
-png_path_final <- "~/project/IPSC_2025_Data/Figure5_combined.png"
+png_path_final <- "~/project/IPSC_2025_Data/Figure6_combined.png"
+tiff_path_final <- "~/project/IPSC_2025_Data/Figure6_combined.tiff"
 ggsave(png_path_final,
        plot = fig5_final, device = "png", bg = "white",
        width = 40, height = 24 * length(cell_lines), dpi = 300, limitsize = FALSE)
-magick::image_write(magick::image_read(png_path_final), path = png_path_final, format = "png")
+magick::image_write(magick::image_read(png_path_final), path = tiff_path_final, format = "tiff")
