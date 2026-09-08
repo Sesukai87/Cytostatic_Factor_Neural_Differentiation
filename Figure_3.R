@@ -57,7 +57,7 @@ crn_to_hem <- subset(Cortical_lineage, CRN_new_mod > 0.5)
 Cortical_lineage <- subset(Cortical_lineage, percent.lmx1a == 0)
 Cortical_lineage <- subset(Cortical_lineage, CRN_new_mod <= 0.5)
 Cortical_lineage <- subset(Cortical_lineage, In_new_mod <= 0)
-Cortical_lineage <-  NormalizeData(Cortical_lineage) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>% RunHarmony(group.by.vars = c("SampleID2")) %>% RunUMAP(reduction = "harmony", dims = 1:10, n.neighbors = 150, min.dist = 0.8, spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5, metric = "euclidean", seed.use = 42) %>%  FindNeighbors(reduction = "harmony", dims = 1:20)
+Cortical_lineage <-  NormalizeData(Cortical_lineage) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>% RunHarmony(group.by.vars = c("SampleID")) %>% RunUMAP(reduction = "harmony", dims = 1:10, n.neighbors = 150, min.dist = 0.8, spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5, metric = "euclidean", seed.use = 42) %>%  FindNeighbors(reduction = "harmony", dims = 1:20)
 Cortical_lineage <- FindClusters(Cortical_lineage, res = 0.6)
 DimPlot(Cortical_lineage, group.by = "seurat_clusters", label = TRUE)
 DimPlot(Cortical_lineage, group.by = "Celltype")
@@ -77,6 +77,9 @@ consensusClusterLabels[names(which(Celltype1 == "Astrocyte" & Celltype2 == "DL_E
 table(consensusClusterLabels)
 Cortical_lineage$Celltype2 <- consensusClusterLabels
 Cortical_lineage <- JoinLayers(Cortical_lineage)
+
+
+
 
 
 Hem_lineage <- subset(merged_IPSC, Celltype == "Epithelial" | Celltype == "Hem_RG" | Celltype == "CRN")
@@ -108,7 +111,7 @@ Hem_lineage_merged <- merge(Hem_lineage_merged, crn_to_hem_unique)
 Hem_lineage <- Hem_lineage_merged
 rm(Hem_lineage_merged)
 Hem_lineage <- subset(Hem_lineage, In_new_mod <= 0)
-Hem_lineage <- NormalizeData(Hem_lineage) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>% RunHarmony(group.by.vars = c("SampleID2")) %>% RunUMAP(reduction = "harmony", dims = 1:5, n.neighbors = 150, min.dist = 0.8, spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5, metric = "euclidean", seed.use = 42) %>%  FindNeighbors(reduction = "harmony", dims = 1:5) %>% FindClusters(res = 0.6)
+Hem_lineage <- NormalizeData(Hem_lineage) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>% RunHarmony(group.by.vars = c("SampleID")) %>% RunUMAP(reduction = "harmony", dims = 1:5, n.neighbors = 150, min.dist = 0.8, spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5, metric = "euclidean", seed.use = 42) %>%  FindNeighbors(reduction = "harmony", dims = 1:5) %>% FindClusters(res = 0.6)
 Hem_lineage <- RenameIdents(Hem_lineage, `0` = "Hem_RG", `1` = "Hem_RG", `2` = "Epithelial", `3` = "Hem_RG", `4` = "CRN", `5` = "Hem_RG", `6` = "Hem_RG", `7` = "Hem_RG", `8` = "CRN", `9` = "Hem_RG", `10` = "Hem_RG", `11` = "Hem_RG", `12` = "Hem_RG", `13` = "Epithelial")
 Hem_lineage$Celltype2 <- Idents(Hem_lineage)
 Celltype1 <- as.character(Hem_lineage$Celltype)
@@ -149,6 +152,39 @@ saveRDS(Cortical_lineage_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_pal
 saveRDS(Hem_lineage_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line")
 
 
+Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line")
+Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line")
+
+for (cl in names(Cortical_lineage_list)) {
+  obj <- Cortical_lineage_list[[cl]]
+  
+  Celltype1 <- as.character(obj$Celltype)
+  Celltype2 <- as.character(obj$Celltype2)
+  names(Celltype1) <- colnames(obj)
+  names(Celltype2) <- colnames(obj)
+  
+  consensusClusterLabels <- Celltype2
+  consensusClusterLabels[names(which(Celltype1 == "IPC_ExN"))] <- "IPC_ExN"
+  
+  obj$Celltype <- consensusClusterLabels
+  Cortical_lineage_list[[cl]] <- obj
+}
+
+for (cl in names(Hem_lineage_list)) {
+  obj <- Hem_lineage_list[[cl]]
+  
+  Celltype1 <- as.character(obj$Celltype)
+  Celltype2 <- as.character(obj$Celltype2)
+  names(Celltype1) <- colnames(obj)
+  names(Celltype2) <- colnames(obj)
+  
+  consensusClusterLabels <- Celltype2
+  consensusClusterLabels[names(which(Celltype1 == "Astrocyte"))] <- "Hem_RG"
+  
+  obj$Celltype <- consensusClusterLabels
+  Hem_lineage_list[[cl]] <- obj
+}
+
 # -----------------------------------------------------------------------
 # Figure 3a: partition UMAPs, per cell line x Protocol, combined into ONE
 # figure (rows = cell line, columns = lineage x Protocol)
@@ -178,7 +214,7 @@ for (cl in cell_lines) {
   )
   cort_line_obj <- cort_line_obj %>%
     NormalizeData() %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>%
-    RunHarmony(group.by.vars = c("SampleID2")) %>%
+    RunHarmony(group.by.vars = c("SampleID")) %>%
     RunUMAP(reduction = "harmony", dims = 1:10, n.neighbors = 150, min.dist = 0.8,
             spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5,
             metric = "euclidean", seed.use = 42)
@@ -190,7 +226,7 @@ for (cl in cell_lines) {
   )
   hem_line_obj <- hem_line_obj %>%
     NormalizeData() %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA() %>%
-    RunHarmony(group.by.vars = c("SampleID2")) %>%
+    RunHarmony(group.by.vars = c("SampleID")) %>%
     RunUMAP(reduction = "harmony", dims = 1:5, n.neighbors = 150, min.dist = 0.8,
             spread = 1.0, repulsion.strength = 0.01, local.connectivity = 5,
             metric = "euclidean", seed.use = 42)
@@ -222,7 +258,7 @@ for (cl in cell_lines) {
           ggtitle(paste0(cl, " | ", lin$name, " | ", prot_label, " (no cells)")) +
           theme(plot.title = element_text(size = 14))
       } else {
-        p <- DimPlot(sub_obj, group.by = "Celltype2", pt.size = 2) +
+        p <- DimPlot(sub_obj, group.by = "Celltype", pt.size = 2) +
           ggtitle(paste0(cl, " | ", lin$name, " | ", prot_label)) +
           big_text_theme + theme(plot.title = element_text(size = 14))
       }
@@ -236,7 +272,7 @@ combined_plot <- wrap_plots(fig3a_panels, ncol = 4)
 ggsave(
   "~/project/IPSC_2025_Data/Figure3a_Dimplot_Celltype_Combined.tiff",
   plot = combined_plot,
-  device = "tiff",
+  device = "png",
   width = 24, height = 6 * length(cell_lines), dpi = 300, limitsize = FALSE
 )
 
@@ -248,6 +284,8 @@ ggsave(
 saveRDS(cort_line_umap_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_umap")
 saveRDS(hem_line_umap_list, "~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_umap")
 
+cort_line_umap_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_umap")
+cort_line_umap_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_umap")
 # -----------------------------------------------------------------------
 # Supplemental Figure 5: faceted FeaturePlots of the 4 markers, shown on
 # EACH cell line's own UMAP embedding (the per-cell-line embeddings built
@@ -303,7 +341,7 @@ ggsave(
 # lines were pooled).
 # -----------------------------------------------------------------------
 desired_order <- c("RG", "IPC_ExN", "DL_ExN", "UL_ExN", "A1 Astrocyte", "A2 Astrocyte", "Hem_RG", "CRN", "Epithelial")
-
+cell_lines <- c("JHC1", "KOLF2.1", "O2C3")
 res_mash_list <- list()
 res_dl_list   <- list()
 res_proc_list <- list()
@@ -341,7 +379,7 @@ for (cl in cell_lines) {
   IPSC_sce <- IPSC_sce[, !ol]
   pb <- aggregateToPseudoBulk(IPSC_sce,
                               assay = "counts",
-                              cluster_id = "Celltype2",
+                              cluster_id = "Celltype",
                               sample_id = "SampleID",
                               verbose = FALSE
   )
@@ -473,9 +511,9 @@ pv <- plot_mash_volcano(res_df_all, title = "mashr Volcano Plot — Protocolplus
 # Reduced per-panel size (was 8x5in, producing a 64x15in canvas where
 # points/text became nearly invisible) - 6x6in per panel keeps the figure
 # more legible at normal zoom while still resolving each panel clearly.
-ggsave("~/project/IPSC_2025_Data/Figure3b_DEG_volcano_plots.tiff",
+ggsave("~/project/IPSC_2025_Data/Figure3b_DEG_volcano_plots.png",
        plot = pv,
-       device = "tiff",
+       device = "png",
        width = 6 * length(unique(res_df_all$Celltype)),
        height = 6 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
@@ -570,7 +608,7 @@ neg_titled <- lapply(cell_lines, function(cl) {
 combined_pos <- plot_grid(plotlist = pos_titled, nrow = 1)
 combined_neg <- plot_grid(plotlist = neg_titled, nrow = 1)
 fig3c_combined <- plot_grid(combined_pos, combined_neg, ncol = 1)
-ggsave("Figure3c_combined.tiff", plot = fig3c_combined, device = "tiff",
+ggsave("Figure3c_combined.png", plot = fig3c_combined, device = "png",
        width = 6 * length(cell_lines), height = 14, dpi = 300, limitsize = FALSE)
 
 # -----------------------------------------------------------------------
@@ -580,9 +618,9 @@ ggsave("Figure3c_combined.tiff", plot = fig3c_combined, device = "tiff",
 # once here since the original script referenced go.gs.bp/go.gs.cc without
 # ever defining them - these must have existed from an earlier interactive
 # session but weren't in the saved script.
-go.gs.bp <- zenith::get_GeneOntology(to = "BP", species = "human")
-go.gs.cc <- zenith::get_GeneOntology(to = "CC", species = "human")
 
+go.gs.cc <- get_GeneOntology("CC", to = "SYMBOL")
+go.gs.bp <- get_GeneOntology("BP", to = "SYMBOL")
 # -----------------------------------------------------------------------
 # Figure 3d: gene-set enrichment (zenith), per cell line, combined
 # -----------------------------------------------------------------------
@@ -751,10 +789,11 @@ fig3d_cc_combined <- wrap_plots(zenith_cc_plots, ncol = length(cell_lines))
 # labels get consistent per-row spacing.
 bp_height <- max(8, 0.35 * length(bp_global_order))
 cc_height <- max(8, 0.35 * length(cc_global_order))
-
-ggsave("Figure3d_GO_BP_combined.tiff", plot = fig3d_bp_combined, device = "tiff",
-       width = 10 * length(cell_lines), height = bp_height, dpi = 300, limitsize = FALSE)
-ggsave("Figure3d_GO_CC_combined.tiff", plot = fig3d_cc_combined, device = "tiff",
+bp_height
+cc_height
+ggsave("Figure3d_GO_BP_combined.png", plot = fig3d_bp_combined, device = "png",
+       width = 40, height = 40, dpi = 300, limitsize = FALSE)
+ggsave("Figure3d_GO_CC_combined.png", plot = fig3d_cc_combined, device = "png",
        width = 10 * length(cell_lines), height = cc_height, dpi = 300, limitsize = FALSE)
 
 
@@ -838,7 +877,7 @@ run_block_de <- function(sub_obj, group_var, block_label) {
   sce <- sce[rowSums(assay(sce, "counts") > 0) > 0, ]
   pb <- tryCatch(
     aggregateToPseudoBulk(sce, assay = "counts",
-                          cluster_id = "Celltype2", sample_id = "SampleID",
+                          cluster_id = "Celltype", sample_id = "SampleID",
                           verbose = FALSE),
     error = function(e) NULL
   )
