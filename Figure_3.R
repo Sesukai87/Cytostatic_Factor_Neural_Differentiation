@@ -270,7 +270,7 @@ for (cl in cell_lines) {
 # 4 columns (Pallial -SDF, Pallial +SDF, Hem -SDF, Hem +SDF) x N cell-line rows
 combined_plot <- wrap_plots(fig3a_panels, ncol = 4)
 ggsave(
-  "~/project/IPSC_2025_Data/Figure3a_Dimplot_Celltype_Combined.tiff",
+  "~/project/IPSC_2025_Data/Figure4a_Dimplot_Celltype_Combined.tiff",
   plot = combined_plot,
   device = "png",
   width = 24, height = 6 * length(cell_lines), dpi = 300, limitsize = FALSE
@@ -427,7 +427,7 @@ res_df_all <- bind_rows(res_df_list)
 res_df_all$CellLine <- factor(res_df_all$CellLine, levels = cell_lines)
 
 # -----------------------------------------------------------------------
-# Figure 3b: volcano plots, faceted by Celltype x CellLine, ONE combined
+# Figure 4b: volcano plots, faceted by Celltype x CellLine, ONE combined
 # figure across all cell lines
 # -----------------------------------------------------------------------
 plot_mash_volcano <- function(res_df, title = "mashr Volcano Plot") {
@@ -511,7 +511,7 @@ pv <- plot_mash_volcano(res_df_all, title = "mashr Volcano Plot — Protocolplus
 # Reduced per-panel size (was 8x5in, producing a 64x15in canvas where
 # points/text became nearly invisible) - 6x6in per panel keeps the figure
 # more legible at normal zoom while still resolving each panel clearly.
-ggsave("~/project/IPSC_2025_Data/Figure3b_DEG_volcano_plots.png",
+ggsave("~/project/IPSC_2025_Data/Figure4b_DEG_volcano_plots.png",
        plot = pv,
        device = "png",
        width = 6 * length(unique(res_df_all$Celltype)),
@@ -519,7 +519,7 @@ ggsave("~/project/IPSC_2025_Data/Figure3b_DEG_volcano_plots.png",
 
 
 # -----------------------------------------------------------------------
-# Figure 3c: DE gene similarity heatmaps, per cell line, combined
+# Figure 4c: DE gene similarity heatmaps, per cell line, combined
 # -----------------------------------------------------------------------
 get_top_pos_genes_resdf <- function(df, celltype, n = nrow(df)) {
   tt <- df %>%
@@ -608,11 +608,11 @@ neg_titled <- lapply(cell_lines, function(cl) {
 combined_pos <- plot_grid(plotlist = pos_titled, nrow = 1)
 combined_neg <- plot_grid(plotlist = neg_titled, nrow = 1)
 fig3c_combined <- plot_grid(combined_pos, combined_neg, ncol = 1)
-ggsave("Figure3c_combined.png", plot = fig3c_combined, device = "png",
+ggsave("Figure4c_combined.png", plot = fig3c_combined, device = "png",
        width = 6 * length(cell_lines), height = 14, dpi = 300, limitsize = FALSE)
 
 # -----------------------------------------------------------------------
-# Figure 3d: gene-set enrichment (zenith), per cell line, combined
+# Figure 4d: gene-set enrichment (zenith), per cell line, combined
 # -----------------------------------------------------------------------
 # Gene sets for zenith gene-set enrichment (Gene Ontology BP/CC), loaded
 # once here since the original script referenced go.gs.bp/go.gs.cc without
@@ -621,11 +621,9 @@ ggsave("Figure3c_combined.png", plot = fig3c_combined, device = "png",
 
 go.gs.cc <- get_GeneOntology("CC", to = "SYMBOL")
 go.gs.bp <- get_GeneOntology("BP", to = "SYMBOL")
+
 # -----------------------------------------------------------------------
-# Figure 3d: gene-set enrichment (zenith), per cell line, combined
-# -----------------------------------------------------------------------
-# -----------------------------------------------------------------------
-# Figure 3d: gene-set enrichment (zenith), per cell line, combined
+# Figure 4d: gene-set enrichment (zenith), per cell line, combined
 # -----------------------------------------------------------------------
 # plotZenithResults() doesn't expose enough control over its internal
 # label rendering to fix overlap reliably (its scale_y_discrete labels=
@@ -791,15 +789,15 @@ bp_height <- max(8, 0.35 * length(bp_global_order))
 cc_height <- max(8, 0.35 * length(cc_global_order))
 bp_height
 cc_height
-ggsave("Figure3d_GO_BP_combined.png", plot = fig3d_bp_combined, device = "png",
+ggsave("Figure4d_GO_BP_combined.png", plot = fig3d_bp_combined, device = "png",
        width = 40, height = 40, dpi = 300, limitsize = FALSE)
-ggsave("Figure3d_GO_CC_combined.png", plot = fig3d_cc_combined, device = "png",
+ggsave("Figure4d_GO_CC_combined.png", plot = fig3d_cc_combined, device = "png",
        width = 10 * length(cell_lines), height = cc_height, dpi = 300, limitsize = FALSE)
 
 
 # -----------------------------------------------------------------------
 # -----------------------------------------------------------------------
-# Supplemental Figure 6 (rebuilt to address reviewer concern about
+# Supplemental Figure 4 (rebuilt to address reviewer concern about
 # E6 vs KSR neural induction media):
 #
 # Design context: neural_induction_media is severely confounded with
@@ -1040,7 +1038,7 @@ fig_s6_combined <- pA / pB / pC +
   )
 
 ggsave(
-  "~/project/IPSC_2025_Data/Supplmentary_Figure6.tiff",
+  "~/project/IPSC_2025_Data/Supplmentary_Figure4.tiff",
   plot = fig_s6_combined,
   device = "tiff",
   width = 22, height = 26, dpi = 300, limitsize = FALSE
