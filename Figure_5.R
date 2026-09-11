@@ -1,21 +1,28 @@
-library(SeuratExtend)
 library(Seurat)
-library(SeuratDisk)    
+library(harmony)
+library(slingshot)
+library(ggplot2)
+library(ggrastr)
+library(ggpubr)
+library(viridis)
+library(MetBrewer)      
+library(WGCNA)
+library(hdWGCNA)
+library(doParallel)
+library(SingleCellExperiment)
+library(scuttle)
 library(dplyr)
 library(tidyr)
-library(tibble)
-library(ggplot2)
-library(ggpubr)
+library(pheatmap)
 library(ggrepel)
 library(ggtext)
-library(pheatmap)
-library(purrr)
-library(stringr)
-library(ComplexHeatmap)   
-library(Matrix)
-library(patchwork)
+library(ComplexHeatmap)
+library(doParallel)
+library(enrichR)
+library(GeneOverlap)
+library(tidyverse)
 library(cowplot)
-library(magick)
+library(patchwork)
 
 big_text_theme <- theme(
   axis.text = element_text(size = 14),
@@ -23,1033 +30,917 @@ big_text_theme <- theme(
   strip.text = element_text(size = 16, face = "bold"),
   legend.text = element_text(size = 13),
   legend.title = element_text(size = 14, face = "bold"),
-  plot.title = element_text(size = 18, face = "bold")
+  plot.title = element_text(size = 18, face = "bold", margin = margin(b = 12))
 )
 
-# Canonical lineage labels, used consistently across Fig 5A/B/C (matches
-# the "<CellLine>: A1 lineage eigengene" style already used for Panel B)
-lineage_labels <- c(
-  dp  = "DP ExN lineage",
-  up  = "UP ExN lineage",
-  A1  = "A1 Astrocyte lineage",
-  A2  = "A2 Astrocyte lineage",
-  crn = "CRN lineage",
-  epi = "Epithelial lineage"
-)
-lineage_order <- c("dp", "up", "A1", "A2", "epi", "crn")
-lineage_order_labeled <- unname(lineage_labels[lineage_order])
-
 # -----------------------------------------------------------------------
-# ONE-TIME SETUP STEP - already completed. This block exports data for
-# pySCENIC to run on in Python and produces merged_IPSC_aucell.loom (used
-# by the block below). Since that loom file already exists and pySCENIC
-# is NOT being re-run, this block is disabled to avoid regenerating an
-# export nobody needs (this was the source of the SaveH5Seurat stall -
-# SeuratDisk's SaveH5Seurat has known compatibility issues/hangs with
-# Seurat v5 Assay5 objects, which is an additional reason not to re-run
-# this unless you specifically need to redo the pySCENIC step itself).
-#
-# Only re-enable (set to TRUE) if you need to regenerate the h5ad export
-# to re-run pySCENIC from scratch.
+# Load PER-CELL-LINE objects produced in Figure_4.R. IMPORTANT: these are
+# the FRESHLY-RECOMPUTED per-cell-line UMAP embeddings (built and saved at
+# the end of the Figure 4a loop in Figure_4.R), NOT the earlier pooled-
+# embedding-then-subset objects. Slingshot trajectory inference below
+# depends directly on UMAP coordinates, so using the same per-line
+# embeddings that Figure 4a itself visualizes keeps Figure 4 and Figure 5
+# consistent - each cell line gets its own independent embedding and
+# downstream trajectory/WGCNA analysis, matching Figure 4's approach.
 # -----------------------------------------------------------------------
-RUN_PYSCENIC_EXPORT <- FALSE
+Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_umap")
+Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_umap")
+cell_lines <- names(Cortical_lineage_list)
 
-if (RUN_PYSCENIC_EXPORT) {
-  merged <- readRDS("~/project/IPSC_2025_Data/merged_Fetal_IPSC_derived_forebrain")
-  merged_IPSC <- subset(merged, Sampletype == "IPSC-Derived")
-  unique(merged_IPSC$gt_line)
-  merged_IPSC$neural_induction_media <- ifelse(
-    grepl("_E6", merged_IPSC$SampleID),
-    "E6",
-    "KSR"
-  )
-  rm(merged)
-  unique(merged_IPSC$gt_line)
-  merged_IPSC$gt_line <- droplevels(merged_IPSC$gt_line)
-  # Seurat v5 Assay5 objects store data in layers, not the old @counts slot -
-  # use LayerData() instead of @assays$RNA@counts.
-  cnts <- LayerData(merged_IPSC, assay = "RNA", layer = "counts")
-  colnames(cnts) <- colnames(merged_IPSC)
-  rownames(cnts) <- rownames(merged_IPSC)
-  merged_IPSC <- CreateSeuratObject(counts = cnts, meta.data = merged_IPSC@meta.data, min.cells = 5)
-  merged_IPSC[["RNA"]] <- as(object = merged_IPSC[["RNA"]], Class = "Assay")
-  SaveH5Seurat(merged_IPSC, filename = "~/project/IPSC_2025_Data/merged_IPSC.h5Seurat")
-  Convert("~/project/IPSC_2025_Data/merged_IPSC.h5Seurat", dest = "h5ad")
+# Result containers, keyed by cell line
+curves_cort_list <- list()
+curves_hem_list  <- list()
+p_pseudotime_cort_list <- list()
+p_pseudotime_hem_list  <- list()
+
+for (cl in cell_lines) {
+  
+  Cortical_lineage <- Cortical_lineage_list[[cl]]
+  Hem_lineage <- Hem_lineage_list[[cl]]
+  
+  ENDS <- c("DL_ExN", "UL_ExN", "A1 Astrocyte", "A2 Astrocyte")
+  set.seed(1)
+  Cortical_lineages <- as.SlingshotDataSet(getLineages(
+    data           = Cortical_lineage@reductions$umap@cell.embeddings,
+    clusterLabels  = Cortical_lineage$Celltype2,
+    dist.method    = "slingshot",
+    end.clus       = ENDS,
+    start.clus     = "RG"))
+  
+  ENDS <- c("CRN", "Epithelial")
+  Hem_lineages <- as.SlingshotDataSet(getLineages(
+    data           = Hem_lineage@reductions$umap@cell.embeddings,
+    clusterLabels  = Hem_lineage$Celltype2,
+    dist.method    = "slingshot",
+    end.clus       = ENDS,
+    start.clus     = "Hem_RG"))
+  
+  curves_cort <- as.SlingshotDataSet(getCurves(
+    data          = Cortical_lineages,
+    thresh        = 1e-1,
+    stretch       = 1e-1,
+    allow.breaks  = F,
+    approx_points = 150
+  ))
+  
+  curves_hem <- as.SlingshotDataSet(getCurves(
+    data          = Hem_lineages,
+    thresh        = 1e-1,
+    stretch       = 1e-1,
+    allow.breaks  = F,
+    approx_points = 150
+  ))
+  
+  curves_cort_list[[cl]] <- curves_cort
+  curves_hem_list[[cl]]  <- curves_hem
+  
+  pseudotime_cort <- as.data.frame(slingPseudotime(curves_cort, na = FALSE))
+  pseudotime_cort$Pseudotime <- apply(pseudotime_cort, 1, max)
+  
+  pseudotime_hem <- as.data.frame(slingPseudotime(curves_hem, na = FALSE))
+  pseudotime_hem$Pseudotime <- apply(pseudotime_hem, 1, max)
+  
+  Cortical_lineage$pseudotime <- pseudotime_cort$Pseudotime
+  Cortical_lineage$dp_pseudotime <- ifelse(Cortical_lineage$Celltype2 %in% c("RG", "IPC_ExN", "DL_ExN"), pseudotime_cort$Lineage2, NA)
+  Cortical_lineage$up_pseudotime <- ifelse(Cortical_lineage$Celltype2 %in% c("RG", "IPC_ExN", 'UL_ExN'), pseudotime_cort$Lineage4 , NA)
+  Cortical_lineage$A1_pseudotime <- ifelse(Cortical_lineage$Celltype2 %in% c("RG", "IPC_ExN", 'A1 Astrocyte'), pseudotime_cort$Lineage3, NA)
+  Cortical_lineage$A2_pseudotime <- ifelse(Cortical_lineage$Celltype2 %in% c("RG", 'A2 Astrocyte'), pseudotime_cort$Lineage1, NA)
+  
+  Hem_lineage$pseudotime <- pseudotime_hem$Pseudotime
+  Hem_lineage$crn_pseudotime <- ifelse(Hem_lineage$Celltype %in% c("Hem_RG", "CRN"), pseudotime_hem$Lineage1 , NA)
+  Hem_lineage$epi_pseudotime <- ifelse(Hem_lineage$Celltype %in% c("Hem_RG", "Epithelial"), pseudotime_hem$Lineage2 , NA)
+  
+  Cortical_lineage$UMAP1 <- Cortical_lineage@reductions$umap@cell.embeddings[,1]
+  Cortical_lineage$UMAP2 <- Cortical_lineage@reductions$umap@cell.embeddings[,2]
+  Hem_lineage$UMAP1 <- Hem_lineage@reductions$umap@cell.embeddings[,1]
+  Hem_lineage$UMAP2 <- Hem_lineage@reductions$umap@cell.embeddings[,2]
+  
+  # Figure 5a panels for this cell line
+  p1 <- Cortical_lineage@meta.data %>%
+    ggplot(aes(x=UMAP1, y=UMAP2, color=dp_pseudotime)) +
+    ggrastr::rasterise(geom_point(size=1), dpi=500, scale=0.75) +
+    coord_equal() + scale_color_gradientn(colors=plasma(256), na.value='grey') +
+    umap_theme() + big_text_theme + ggtitle(paste0(cl, ": DP"))
+  p2 <- Cortical_lineage@meta.data %>%
+    ggplot(aes(x=UMAP1, y=UMAP2, color=up_pseudotime)) +
+    ggrastr::rasterise(geom_point(size=1), dpi=500, scale=0.75) +
+    coord_equal() + scale_color_gradientn(colors=viridis(256), na.value='grey') +
+    umap_theme() + big_text_theme + ggtitle(paste0(cl, ": UP"))
+  p3 <- Cortical_lineage@meta.data %>%
+    ggplot(aes(x=UMAP1, y=UMAP2, color=A1_pseudotime)) +
+    ggrastr::rasterise(geom_point(size=1), dpi=500, scale=0.75) +
+    coord_equal() + scale_color_gradientn(colors=inferno(256), na.value='grey') +
+    umap_theme() + big_text_theme + ggtitle(paste0(cl, ": A1"))
+  p4 <- Cortical_lineage@meta.data %>%
+    ggplot(aes(x=UMAP1, y=UMAP2, color=A2_pseudotime)) +
+    ggrastr::rasterise(geom_point(size=1), dpi=500, scale=0.75) +
+    coord_equal() + scale_color_gradientn(colors=mako(256), na.value='grey') +
+    umap_theme() + big_text_theme + ggtitle(paste0(cl, ": A2"))
+  p5 <- Hem_lineage@meta.data %>%
+    ggplot(aes(x=UMAP1, y=UMAP2, color=crn_pseudotime)) +
+    ggrastr::rasterise(geom_point(size=1), dpi=500, scale=0.75) +
+    coord_equal() + scale_color_gradientn(colors=inferno(256), na.value='grey') +
+    umap_theme() + big_text_theme + ggtitle(paste0(cl, ": CRN"))
+  p6 <- Hem_lineage@meta.data %>%
+    ggplot(aes(x=UMAP1, y=UMAP2, color=epi_pseudotime)) +
+    ggrastr::rasterise(geom_point(size=1), dpi=500, scale=0.75) +
+    coord_equal() + scale_color_gradientn(colors=mako(256), na.value='grey') +
+    umap_theme() + big_text_theme + ggtitle(paste0(cl, ": Epi"))
+  
+  p_pseudotime_cort_list[[cl]] <- (p1 + p2) / (p3 + p4)
+  p_pseudotime_hem_list[[cl]]  <- (p5 + p6)
+  
+  Cortical_lineage_list[[cl]] <- Cortical_lineage
+  Hem_lineage_list[[cl]] <- Hem_lineage
 }
 
+# -----------------------------------------------------------------------
+# Figure 5a: ONE combined figure, one row per cell line
+# -----------------------------------------------------------------------
+fig4a_cort_combined <- wrap_plots(p_pseudotime_cort_list, ncol = 1) +
+  plot_annotation(title = "Cortical Lineage By Slingshot Pseudotime, per Cell Line")
+ggsave("~/project/IPSC_2025_Data/Figure5a_cortical_pseudotime.tiff",
+       plot = fig4a_cort_combined, device = "tiff",
+       width = 12, height = 10 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
-#After Runing pySCENIC (unchanged - SCENIC is not being re-run, per your
-#note; we only re-partition the results per cell line downstream)
-merged <- readRDS("~/project/IPSC_2025_Data/merged_Fetal_IPSC_derived_forebrain")
-merged_IPSC <- subset(merged, Sampletype == "IPSC-Derived")
-unique(merged_IPSC$gt_line)
-merged_IPSC$neural_induction_media <- ifelse(
-  grepl("_E6", merged_IPSC$SampleID),
-  "E6",
-  "KSR"
-)
-rm(merged)
-unique(merged_IPSC$gt_line)
-merged_IPSC$gt_line <- droplevels(merged_IPSC$gt_line)
-cell_lines <- levels(merged_IPSC$gt_line)
-scenic_loom_path <- "~/project/IPSC_2025_Data/SCENIC_Loom_Input/merged_IPSC_aucell.loom"
-merged_IPSC <- ImportPyscenicLoom(scenic_loom_path, seu = merged_IPSC)
-dim(merged_IPSC)
-dim(merged_IPSC@misc$SCENIC$RegulonsAUC)
+fig4a_hem_combined <- wrap_plots(p_pseudotime_hem_list, ncol = 1) +
+  plot_annotation(title = "Hem Lineage By Slingshot Pseudotime, per Cell Line")
+ggsave("~/project/IPSC_2025_Data/Figure5a_hem_pseudotime.tiff",
+       plot = fig4a_hem_combined, device = "tiff",
+       width = 10, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 
 # -----------------------------------------------------------------------
-# IMPORTANT FIX: load the FINAL per-cell-line objects from Figure_6.R
-# (which include per-line Slingshot pseudotime, per-line WGCNA modules,
-# and per-line eigengenes), NOT the early pooled objects Figure_4.R saves
-# before any per-line splitting. The pooled objects never had per-line
-# pseudotime computed on them at all - Slingshot only runs, separately per
-# cell line, inside Figure_6.R's own loop. Using the pooled objects here
-# would source Fig5's lineage/pseudotime assignments from a stale,
-# inconsistent source relative to every other per-line analysis in this
-# pipeline (Fig4/Fig5).
+# Custom kME plot: hub genes on the X-AXIS (not in a side list box like
+# hdWGCNA's default PlotKMEs()), faceted by module. Manually implements a
+# "reorder within facet" bar layout (so genes are sorted by kME within
+# each module's panel) without requiring the tidytext package.
 # -----------------------------------------------------------------------
-Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_wgcna")
-Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_wgcna")
+plot_kme_custom <- function(obj, wgcna_name, n_hubs = 10, title = "") {
+  modules_df <- GetModules(obj, wgcna_name = wgcna_name)
+  mod_levels <- setdiff(levels(modules_df$module), "grey")
+  
+  # kME_<x> columns are keyed by each module's original WGCNA COLOR (e.g.
+  # kME_turquoise), NOT by the module's current display name - renaming
+  # (ResetModuleNames) only changes the `module` label column itself.
+  # Look up each module's color from modules_df$color (present regardless
+  # of renaming) to find its kME column; fall back to the display name in
+  # case a given hdWGCNA version DOES key kME columns by name.
+  has_color_col <- "color" %in% colnames(modules_df)
+  
+  hub_list <- lapply(mod_levels, function(m) {
+    sub_df <- modules_df %>% filter(module == m)
+    if (nrow(sub_df) == 0) return(NULL)
+    
+    kme_col <- NULL
+    if (has_color_col) {
+      this_color <- unique(sub_df$color)[1]
+      candidate <- paste0("kME_", this_color)
+      if (candidate %in% colnames(modules_df)) kme_col <- candidate
+    }
+    if (is.null(kme_col)) {
+      candidate <- paste0("kME_", m)
+      if (candidate %in% colnames(modules_df)) kme_col <- candidate
+    }
+    if (is.null(kme_col)) return(NULL)
+    
+    sub_df %>%
+      arrange(desc(.data[[kme_col]])) %>%
+      slice_head(n = n_hubs) %>%
+      transmute(gene = gene_name, kME = .data[[kme_col]], module = m)
+  })
+  hub_df <- bind_rows(hub_list)
+  if (nrow(hub_df) == 0) {
+    warning("plot_kme_custom(): no hub genes found for wgcna_name='", wgcna_name,
+            "'. Available GetModules() columns: ", paste(colnames(modules_df), collapse = ", "),
+            " | module levels: ", paste(mod_levels, collapse = ", "),
+            " -- Returning a blank placeholder plot.")
+    return(ggplot() + theme_void() + ggtitle(paste0(title, " (no hub genes found)")))
+  }
+  
+  # manual reorder-within-facet: combine gene+module into a unique factor
+  # level, ordered by kME within each module, then strip the module suffix
+  # back off for the displayed axis labels.
+  hub_df <- hub_df %>%
+    group_by(module) %>%
+    mutate(gene_key = factor(paste(gene, module, sep = "___"),
+                             levels = paste(gene[order(kME)], module, sep = "___"))) %>%
+    ungroup()
+  
+  ggplot(hub_df, aes(x = gene_key, y = kME, fill = module)) +
+    geom_col() +
+    facet_wrap(~module, scales = "free_x", nrow = 2) +
+    scale_x_discrete(labels = function(x) sub("___.*", "", x)) +
+    theme_bw() +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 10),
+      strip.text = element_text(size = 11, face = "bold"),
+      legend.position = "none",
+      plot.title = element_text(size = 16, face = "bold")
+    ) +
+    labs(x = "Hub gene", y = "kME", title = title)
+}
+
+# -----------------------------------------------------------------------
+# Figure 5b: WGCNA modules, run SEPARATELY within each cell line
+#
+# STAGE 1 (SLOW): module-finding. This is the expensive part - once it
+# completes, a checkpoint is saved below and everything after it can be
+# re-run independently without repeating this loop.
+# -----------------------------------------------------------------------
+
+for (cl in cell_lines) {
+  
+  Cortical_lineage <- Cortical_lineage_list[[cl]]
+  Hem_lineage <- Hem_lineage_list[[cl]]
+  
+  cl_wgcna <- paste0("trajectory_", cl)
+  
+  # --- Cortical lineage WGCNA ---
+  Cortical_lineage <- SetupForWGCNA(Cortical_lineage, gene_select = "fraction", fraction = 0.05, wgcna_name = cl_wgcna)
+  Cortical_lineage <- MetacellsByGroups(
+    Cortical_lineage, group.by = c("Celltype2", "SampleID"),
+    reduction = 'harmony', k = 10, max_shared = 10, ident.group = 'Celltype2'
+  )
+  Cortical_lineage <- NormalizeMetacells(Cortical_lineage)
+  cl_cores <- makeCluster(max(1, parallel::detectCores() - 1))
+  registerDoParallel(cl_cores)
+  Cortical_lineage <- SetDatExpr(
+    Cortical_lineage,
+    group_name = unique(Cortical_lineage@misc[[cl_wgcna]]$wgcna_metacell_obj$Celltype2),
+    group.by='Celltype2', assay = 'RNA', layer = 'data'
+  )
+  Cortical_lineage <- TestSoftPowers(Cortical_lineage)
+  Cortical_lineage <- ConstructNetwork(Cortical_lineage, tom_name = cl_wgcna, overwrite_tom = TRUE)
+  Cortical_lineage <- ModuleEigengenes(Cortical_lineage, group.by.vars = c("SampleID"))
+  Cortical_lineage <- ModuleConnectivity(Cortical_lineage)
+  Cortical_lineage <- ResetModuleNames(Cortical_lineage, new_name = paste0(cl, "-Pallial-M"))
+  stopCluster(cl_cores)
+  
+  # --- Hem lineage WGCNA ---
+  cl_cores <- makeCluster(max(1, parallel::detectCores() - 1))
+  registerDoParallel(cl_cores)
+  Hem_lineage <- SetupForWGCNA(Hem_lineage, gene_select = "fraction", fraction = 0.05, wgcna_name = cl_wgcna)
+  Hem_lineage <- MetacellsByGroups(
+    Hem_lineage, group.by = c("Celltype2", "SampleID"),
+    reduction = 'harmony', k = 10, max_shared = 10, ident.group = 'Celltype2'
+  )
+  Hem_lineage <- NormalizeMetacells(Hem_lineage)
+  Hem_lineage <- SetDatExpr(
+    Hem_lineage,
+    group_name = unique(Hem_lineage@misc[[cl_wgcna]]$wgcna_metacell_obj$Celltype2),
+    group.by='Celltype2', assay = 'RNA', layer = 'data'
+  )
+  Hem_lineage <- TestSoftPowers(Hem_lineage)
+  Hem_lineage <- ConstructNetwork(Hem_lineage, tom_name = cl_wgcna, overwrite_tom = TRUE)
+  Hem_lineage <- ModuleEigengenes(Hem_lineage, group.by.vars = c("SampleID"))
+  Hem_lineage <- ModuleConnectivity(Hem_lineage)
+  Hem_lineage <- ResetModuleNames(Hem_lineage, new_name = paste0(cl, "-Hem-M"))
+  stopCluster(cl_cores)
+  
+  Cortical_lineage_list[[cl]] <- Cortical_lineage
+  Hem_lineage_list[[cl]] <- Hem_lineage
+}
+
+# -----------------------------------------------------------------------
+# CHECKPOINT: module-finding (the slow part - TestSoftPowers /
+# ConstructNetwork / ModuleEigengenes / ModuleConnectivity) is complete
+# at this point, with plain numeric module names (M1, M2, ...). Save here
+# so any future re-run of renaming/relabeling/replotting below can start
+# from this checkpoint instead of re-running the expensive construction.
+# -----------------------------------------------------------------------
+saveRDS(Cortical_lineage_list, "~/project/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
+saveRDS(Hem_lineage_list, "~/project/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
+
+# =========================================================================
+# EVERYTHING BELOW THIS POINT IS FAST (renaming + plotting only) and can be
+# RE-RUN INDEPENDENTLY without repeating the module-finding above.
+#
+# If Cortical_lineage_list / Hem_lineage_list are not already in your R
+# session (e.g. you're starting a fresh session today), uncomment these two
+# lines to reload the checkpoint saved above instead of re-running the
+# WGCNA construction loop:
+#
+
+print_top_go_terms <- function(obj, wgcna_name, database = "GO_Biological_Process_2023", n_terms = 8) {
+  et <- GetEnrichrTable(obj, wgcna_name = wgcna_name)
+  et %>%
+    filter(db == database, module != "grey") %>%
+    group_by(module) %>%
+    arrange(P.value, .by_group = TRUE) %>%
+    slice_head(n = n_terms) %>%
+    select(module, Term, P.value, Adjusted.P.value, Genes) %>%
+    ungroup()
+}
+
+for (cl in cell_lines) {
+  cl_wgcna <- paste0("trajectory_", cl)
+  
+  cat("\n\n==========", cl, ": Pallial ==========\n")
+  cort_top <- print_top_go_terms(Cortical_lineage_list[[cl]], cl_wgcna)
+  print(cort_top, n = Inf)
+  
+  cat("\n\n==========", cl, ": Hem ==========\n")
+  hem_top <- print_top_go_terms(Hem_lineage_list[[cl]], cl_wgcna)
+  print(hem_top, n = Inf)
+}
 
 Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
 Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
+# cell_lines <- names(Cortical_lineage_list)
+# =========================================================================
+Cortical_lineage_list_org <- Cortical_lineage_list
+Hem_lineage_list_org <- Hem_lineage_list
 
 
-# Transfer metadata separately PER CELL LINE (barcodes are unique dataset-
-# wide, so matching by rowname still correctly routes each cell's own
-# line-specific pseudotime/lineage values into merged_IPSC).
+Cortical_lineage_list <- Cortical_lineage_list_org 
+Hem_lineage_list <- Hem_lineage_list_org  
+p_kme_cort_list <- list()
+p_kme_hem_list  <- list()
+
+# -----------------------------------------------------------------------
+# Explicit, hand-specified module renaming: reorders/relabels modules so
+# their NUMBER reflects a common functional category across cell lines
+# (1 = translation, 2 = cell cycle, 3 = polarization, 4 = axon development,
+# 5 = synapse activity for Pallial; 1 = translation, 2 = epitheliogenesis,
+# 3 = neuron differentiation for Hem), matched to JHC1's ordering. "UM" =
+# unique module (a module with no clear cross-line functional counterpart).
+# Where one original module's function split across two new categories in
+# a way that didn't cleanly fit a single number, a "-1"/"-2" suffix is used
+# (e.g. M4-1, M4-2) rather than inventing a new top-level number.
+# -----------------------------------------------------------------------
+pallial_rename_maps <- list(
+  JHC1 = c(
+    "JHC1-Pallial-M2" = "JHC1-Pallial-M1",
+    "JHC1-Pallial-M6" = "JHC1-Pallial-M2",
+    "JHC1-Pallial-M3" = "JHC1-Pallial-M4-1",
+    "JHC1-Pallial-M5" = "JHC1-Pallial-M4-2",
+    "JHC1-Pallial-M1" = "JHC1-Pallial-M5",
+    "JHC1-Pallial-M4" = "JHC1-Pallial-UM1"
+  ),
+  `KOLF2.1` = c(
+    "KOLF2.1-Pallial-M1" = "KOLF2.1-Pallial-M1",
+    "KOLF2.1-Pallial-M3" = "KOLF2.1-Pallial-M3",
+    "KOLF2.1-Pallial-M4" = "KOLF2.1-Pallial-M5-1",
+    "KOLF2.1-Pallial-M6" = "KOLF2.1-Pallial-M5-2",
+    "KOLF2.1-Pallial-M2" = "KOLF2.1-Pallial-UM1",
+    "KOLF2.1-Pallial-M5" = "KOLF2.1-Pallial-UM2"
+  ),
+  O2C3 = c(
+    "O2C3-Pallial-M1" = "O2C3-Pallial-M1",
+    "O2C3-Pallial-M4" = "O2C3-Pallial-M2",
+    "O2C3-Pallial-M2" = "O2C3-Pallial-M3",
+    "O2C3-Pallial-M5" = "O2C3-Pallial-M4",
+    "O2C3-Pallial-M3" = "O2C3-Pallial-M5-1",
+    "O2C3-Pallial-M7" = "O2C3-Pallial-M5-2",
+    "O2C3-Pallial-M6" = "O2C3-Pallial-UM1"
+  )
+)
+
+hem_rename_maps <- list(
+  JHC1 = c(
+    "JHC1-Hem-M1" = "JHC1-Hem-M1",
+    "JHC1-Hem-M2" = "JHC1-Hem-M2",
+    "JHC1-Hem-M3" = "JHC1-Hem-M3",
+    "JHC1-Hem-M4" = "JHC1-Hem-UM1"
+  ),
+  `KOLF2.1` = c(
+    "KOLF2.1-Hem-M1" = "KOLF2.1-Hem-M1",
+    "KOLF2.1-Hem-M2" = "KOLF2.1-Hem-UM1",
+    "KOLF2.1-Hem-M3" = "KOLF2.1-Hem-M3-1",
+    "KOLF2.1-Hem-M4" = "KOLF2.1-Hem-M2-1",
+    "KOLF2.1-Hem-M5" = "KOLF2.1-Hem-M2-2",
+    "KOLF2.1-Hem-M6" = "KOLF2.1-Hem-M3-2"
+  ),
+  O2C3 = c(
+    "O2C3-Hem-M1" = "O2C3-Hem-M1",
+    "O2C3-Hem-M2" = "O2C3-Hem-M2",
+    "O2C3-Hem-M3" = "O2C3-Hem-M3-1",
+    "O2C3-Hem-M4" = "O2C3-Hem-M3-2",
+    "O2C3-Hem-M5" = "O2C3-Hem-UM1",
+    "O2C3-Hem-M6" = "O2C3-Hem-M3-3",
+    "O2C3-Hem-M7" = "O2C3-Hem-M3-4"
+  )
+)
+
+# -----------------------------------------------------------------------
+# Module renaming: pure text relabeling via SetModules() - NOT
+# ResetModuleNames()'s named-list mode.
+#
+# IMPORTANT (found via diagnostic): ResetModuleNames(new_name = <named
+# list>) does NOT do a pure text relabel - it silently RECOMPUTES kME
+# values (max observed difference 0.595 for the same gene in the same,
+# UNRENAMED module M1->M1), corrupting downstream hub-gene selection and
+# GO-term enrichment. A pure reorder via SetModules() (same names, just
+# different factor level order) was verified to preserve kME EXACTLY
+# (diff = 0), so the approach below only ever does simple, provably
+# value-safe text substitution: relabel the `module` factor AND rename
+# the matching kME_<old-name> column headers (pure colname substitution,
+# touches no numeric values) - never a recomputation.
+# -----------------------------------------------------------------------
+rename_modules_native <- function(obj, wgcna_name, rename_map) {
+  ordered_old_names <- names(rename_map)
+  
+  modules_df <- GetModules(obj, wgcna_name = wgcna_name)
+  current_levels <- setdiff(levels(modules_df$module), "grey")
+  if (!setequal(current_levels, ordered_old_names)) {
+    stop(
+      "rename_modules_native(): current module names don't match the ",
+      "rename map's expected names - this object may already have been ",
+      "renamed in a previous run. Reload it fresh from the Stage 1 ",
+      "checkpoint before re-running Stage 2.\n",
+      "  Current module levels: ", paste(current_levels, collapse = ", "), "\n",
+      "  Rename map expects:    ", paste(ordered_old_names, collapse = ", ")
+    )
+  }
+  
+  new_names_ordered <- unname(rename_map[ordered_old_names])
+  
+  # Relabel the module factor values (pure text substitution) AND reorder
+  # to the desired functional sequence in the same step.
+  old_char <- as.character(modules_df$module)
+  new_char <- ifelse(old_char %in% names(rename_map), unname(rename_map[old_char]), old_char)
+  modules_df$module <- factor(new_char, levels = c(new_names_ordered, "grey"))
+  
+  # Rename the matching kME_<old-name> column HEADERS to kME_<new-name> -
+  # a pure colname substitution that does not touch any numeric values.
+  old_kme_cols <- paste0("kME_", ordered_old_names)
+  new_kme_cols <- paste0("kME_", new_names_ordered)
+  has_col <- old_kme_cols %in% colnames(modules_df)
+  colnames(modules_df)[match(old_kme_cols[has_col], colnames(modules_df))] <- new_kme_cols[has_col]
+  
+  obj <- SetModules(obj, modules_df, wgcna_name = wgcna_name)
+  obj
+}
+
+# GetMEs()'s eigengene matrix is a SEPARATE cached object that SetModules()
+# does not touch (confirmed via diagnostic - it is unaffected regardless of
+# any module-table renaming), so its columns must be renamed manually. This
+# is a pure colname substitution (no values touched), safe for the same
+# reason the module-table rename above is safe. Keyed on the RAW/Stage-1
+# names, which is exactly what rename_map's keys already are.
+rename_ME_columns <- function(MEs, rename_map) {
+  colnames(MEs) <- ifelse(colnames(MEs) %in% names(rename_map),
+                          unname(rename_map[colnames(MEs)]),
+                          colnames(MEs))
+  MEs
+}
+
+for (cl in cell_lines) {
+  
+  Cortical_lineage <- Cortical_lineage_list[[cl]]
+  Hem_lineage <- Hem_lineage_list[[cl]]
+  cl_wgcna <- paste0("trajectory_", cl)
+  
+  Cortical_lineage <- rename_modules_native(Cortical_lineage, cl_wgcna, pallial_rename_maps[[cl]])
+  Hem_lineage <- rename_modules_native(Hem_lineage, cl_wgcna, hem_rename_maps[[cl]])
+  
+  # GetMEs() does NOT read from the modules table SetModules() just updated
+  # - it reads from a SEPARATE internal cache (@misc[[wgcna_name]]$MEs /
+  # $hMEs), confirmed via hdWGCNA's own source. PlotModuleTrajectory() and
+  # FindDMEs() call GetMEs() internally, so renaming a local copy and
+  # cbinding into meta.data (as before) is not enough - those functions
+  # would still see the stale internal cache. Fix: rename BOTH the
+  # non-harmonized (MEs) and harmonized (hMEs) versions and write them
+  # back into the object's real internal cache using hdWGCNA's own
+  # (unexported but fully functional) SetMEs().
+  MEs_cort_raw <- rename_ME_columns(GetMEs(Cortical_lineage, harmonized = FALSE), pallial_rename_maps[[cl]])
+  Cortical_lineage <- hdWGCNA:::SetMEs(Cortical_lineage, MEs_cort_raw, harmonized = FALSE, wgcna_name = cl_wgcna)
+  MEs_cort <- rename_ME_columns(GetMEs(Cortical_lineage, harmonized = TRUE), pallial_rename_maps[[cl]])
+  Cortical_lineage <- hdWGCNA:::SetMEs(Cortical_lineage, MEs_cort, harmonized = TRUE, wgcna_name = cl_wgcna)
+  
+  MEs_hem_raw <- rename_ME_columns(GetMEs(Hem_lineage, harmonized = FALSE), hem_rename_maps[[cl]])
+  Hem_lineage <- hdWGCNA:::SetMEs(Hem_lineage, MEs_hem_raw, harmonized = FALSE, wgcna_name = cl_wgcna)
+  MEs_hem <- rename_ME_columns(GetMEs(Hem_lineage, harmonized = TRUE), hem_rename_maps[[cl]])
+  Hem_lineage <- hdWGCNA:::SetMEs(Hem_lineage, MEs_hem, harmonized = TRUE, wgcna_name = cl_wgcna)
+  
+  meta_cort <- Cortical_lineage@meta.data
+  Cortical_lineage@meta.data <- cbind(meta_cort, MEs_cort)
+  meta_hem <- Hem_lineage@meta.data
+  Hem_lineage@meta.data <- cbind(meta_hem, MEs_hem)
+  
+  split_pseudotime <- function(df, colname) {
+    plus_col  <- paste0(colname, "_plus_pseudotime")
+    minus_col <- paste0(colname, "_minus_pseudotime")
+    df[[plus_col]]  <- ifelse(df$Protocol == "plus", df[[colname]], NA)
+    df[[minus_col]] <- ifelse(df$Protocol == "minus", df[[colname]], NA)
+    df
+  }
+  md_cort <- Cortical_lineage@meta.data
+  for (pt in c("dp_pseudotime", "up_pseudotime", "A1_pseudotime", "A2_pseudotime")) md_cort <- split_pseudotime(md_cort, pt)
+  md_hem <- Hem_lineage@meta.data
+  for (pt in c("crn_pseudotime", "epi_pseudotime")) md_hem <- split_pseudotime(md_hem, pt)
+  Cortical_lineage@meta.data <- md_cort
+  Hem_lineage@meta.data <- md_hem
+  
+  # Custom hub-genes-on-x-axis kME plots (Item 2), replacing PlotKMEs().
+  # No display_map needed anymore - GetModules() already returns the final
+  # fancy names directly.
+  p_kme_cort_list[[cl]] <- plot_kme_custom(Cortical_lineage, cl_wgcna, n_hubs = 10,
+                                           title = paste0(cl, ": Cortical kME"))
+  p_kme_hem_list[[cl]] <- plot_kme_custom(Hem_lineage, cl_wgcna, n_hubs = 10,
+                                          title = paste0(cl, ": Hem kME"))
+  
+  Cortical_lineage_list[[cl]] <- Cortical_lineage
+  Hem_lineage_list[[cl]] <- Hem_lineage
+}
+
+fig4b_cort_combined <- wrap_plots(p_kme_cort_list, ncol = 1)
+ggsave("~/project/IPSC_2025_Data/Figure_5b_cort.png",
+       plot = fig4b_cort_combined, device = "png",
+       width = 24, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
+fig4b_hem_combined <- wrap_plots(p_kme_hem_list, ncol = 1)
+ggsave("~/project/IPSC_2025_Data/Figure_5b_hem.png",
+       plot = fig4b_hem_combined, device = "png",
+       width = 20, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
+
+
+# -----------------------------------------------------------------------
+# Figure 5c: module eigengene trajectories, per cell line, combined
+# -----------------------------------------------------------------------
+protocol_colors <- met.brewer("Lakota", n = 2, type = 'discrete')
+protocol_labels <- c("minus", "plus")
+
+fig4c_cort_list <- list()
+fig4c_hem_list  <- list()
+
 for (cl in cell_lines) {
   Cortical_lineage <- Cortical_lineage_list[[cl]]
   Hem_lineage <- Hem_lineage_list[[cl]]
   
-  # Match on the ORIGINAL barcode stamped into metadata (orig_barcode) in
-  # Figure_5.R BEFORE the subset+re-embed branches re-encoded cell names.
-  # The Cortical and Hem lineage objects are built via separate
-  # subset+merge branches that append DIFFERENT disambiguating suffixes to
-  # the cell names, so their barcodes no longer match merged_IPSC's (the
-  # Hem branch in particular diverged completely - 0 barcode overlap). A
-  # metadata column survives subset()/merge() untouched, so orig_barcode
-  # holds each cell's name AS IT EXISTS in merged_IPSC, giving a stable,
-  # exact key. rownames(merged_IPSC) ARE those original barcodes, so we
-  # match orig_barcode directly against colnames(merged_IPSC).
-  stopifnot("orig_barcode" %in% colnames(Hem_lineage@meta.data),
-            "orig_barcode" %in% colnames(Cortical_lineage@meta.data))
+  # extra_margin: uniform margins around each panel. strip_fix blanks the
+  # module facet labels (leaving the panels themselves) and enlarges the
+  # axis tick text. Both are applied AFTER big_text_theme in each panel's
+  # chain, and strip.text=element_blank() is repeated as a trailing theme()
+  # on each panel (below) so the S7/ggplot2-4.0 theme-merge can't un-blank
+  # it via big_text_theme's own strip.text setting.
+  extra_margin <- theme(plot.margin = margin(t = 15, r = 15, b = 10, l = 15))
+  #strip_fix <- theme(
+  #  strip.text = element_blank(),
+  #  strip.background = element_blank(),
+  #  axis.text = element_text(size = 25)   # enlarge x/y tick text on all Fig4c panels
+  #)
   
-  meta_hem <- Hem_lineage@meta.data[, c("orig_barcode", "Celltype2", grep("pseudotime", colnames(Hem_lineage@meta.data), value = TRUE), grep("lineage", colnames(Hem_lineage@meta.data), value = TRUE))]
-  meta_hem$pseudotime <- NULL
+  strip_fix <- theme(
+    strip.text = element_text(size = 11),      # small, plain labels (no bold, no grey box)
+    strip.background = element_blank(),
+    axis.text = element_text(size = 18)
+  )
   
-  meta_cor <- Cortical_lineage@meta.data[, c("orig_barcode", "Celltype2", grep("pseudotime", colnames(Cortical_lineage@meta.data), value = TRUE), grep("lineage", colnames(Cortical_lineage@meta.data), value = TRUE))]
-  meta_cor$pseudotime <- NULL
+  # Fixed facet columns for BOTH lineages so every module sub-panel is the
+  # same physical size regardless of Hem vs Pallial (Hem previously used
+  # ncol=5, Pallial ncol=7, which made their facets different sizes).
+  facet_ncol <- 7
+  blank_strip <- theme(strip.text = element_blank())   # trailing override (S7 merge-proof)
   
-  meta_hem[] <- lapply(meta_hem, function(x) if (is.factor(x)) as.character(x) else x)
-  meta_cor[] <- lapply(meta_cor, function(x) if (is.factor(x)) as.character(x) else x)
+  p_dp <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("dp_pseudotime_plus_pseudotime", "dp_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": DP lineage eigengene")) + big_text_theme + extra_margin + strip_fix + NoLegend() + blank_strip
+  p_up <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("up_pseudotime_plus_pseudotime", "up_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": UP lineage eigengene")) + big_text_theme + extra_margin + strip_fix + blank_strip
+  p_A1 <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("A1_pseudotime_plus_pseudotime", "A1_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": A1 lineage eigengene")) + big_text_theme + extra_margin + strip_fix + NoLegend() + blank_strip
+  p_A2 <- PlotModuleTrajectory(Cortical_lineage, pseudotime_col = c("A2_pseudotime_plus_pseudotime", "A2_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": A2 lineage eigengene")) + big_text_theme + extra_margin + strip_fix + blank_strip
   
-  # A cell can appear in BOTH the Cortical and Hem branches (or be
-  # duplicated within one), so an orig_barcode could recur - drop any
-  # colliding orig_barcode rather than arbitrarily picking one.
-  ob_hem <- meta_hem$orig_barcode
-  ob_cor <- meta_cor$orig_barcode
-  dup_hem <- ob_hem %in% ob_hem[duplicated(ob_hem)]
-  dup_cor <- ob_cor %in% ob_cor[duplicated(ob_cor)]
-  if (sum(dup_hem) > 0) cat(cl, ": dropping", sum(dup_hem), "Hem cells with duplicate orig_barcode\n")
-  if (sum(dup_cor) > 0) cat(cl, ": dropping", sum(dup_cor), "Cortical cells with duplicate orig_barcode\n")
-  meta_hem <- meta_hem[!dup_hem, , drop = FALSE]
-  meta_cor <- meta_cor[!dup_cor, , drop = FALSE]
+  p_crn <- PlotModuleTrajectory(Hem_lineage, pseudotime_col = c("crn_pseudotime_plus_pseudotime", "crn_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": CRN lineage eigengene")) + big_text_theme + extra_margin + strip_fix + blank_strip
+  p_epi <- PlotModuleTrajectory(Hem_lineage, pseudotime_col = c("epi_pseudotime_plus_pseudotime", "epi_pseudotime_minus_pseudotime"), group_colors = protocol_colors, ncol = facet_ncol) +
+    scale_color_manual(values = protocol_colors, labels = protocol_labels) +
+    ggtitle(paste0(cl, ": Epithelial lineage eigengene")) + big_text_theme + extra_margin + strip_fix + NoLegend() + blank_strip
   
-  rownames(meta_hem) <- meta_hem$orig_barcode; meta_hem$orig_barcode <- NULL
-  rownames(meta_cor) <- meta_cor$orig_barcode; meta_cor$orig_barcode <- NULL
-  
-  common_hem <- intersect(rownames(meta_hem), colnames(merged_IPSC))
-  merged_IPSC@meta.data[common_hem, colnames(meta_hem)] <- meta_hem[common_hem, ]
-  
-  common_cor <- intersect(rownames(meta_cor), colnames(merged_IPSC))
-  merged_IPSC@meta.data[common_cor, colnames(meta_cor)] <- meta_cor[common_cor, ]
-  
-  cat(cl, "- Hem cells matched:", length(common_hem), "/", nrow(meta_hem),
-      "| Cortical cells matched:", length(common_cor), "/", nrow(meta_cor), "\n")
+  fig4c_cort_list[[cl]] <- (p_dp + p_up) / (p_A1 + p_A2)
+  fig4c_hem_list[[cl]]  <- (p_crn + p_epi)
 }
-table(merged_IPSC$Celltype2)
 
-merged_IPSC <- subset(merged_IPSC, Celltype2 == "A1 Astrocyte" | Celltype2 == "A2 Astrocyte" | Celltype2 == "CRN" | Celltype2 == "DL_ExN" | Celltype2 == "UL_ExN" | Celltype2 == "IPC_ExN" | Celltype2 == "RG" | Celltype2 == "Epithelial" | Celltype2 == "Hem_RG")
-merged_IPSC@misc$SCENIC$RegulonsAUC <- merged_IPSC@misc$SCENIC$RegulonsAUC[colnames(merged_IPSC),]
-tf_auc <- merged_IPSC@misc$SCENIC$RegulonsAUC
-dim(tf_auc)
-dim(merged_IPSC)
-identical(rownames(tf_auc), colnames(merged_IPSC))
-tf_auc <- tf_auc %>% mutate(across(everything(), ~ replace_na(., 0)))
-identical(rownames(tf_auc), colnames(merged_IPSC))
-tf_counts <- t(tf_auc)
-# Properly CREATE the TF assay (as Assay5, matching Seurat v5's default
-# object class used throughout this pipeline) rather than assigning
-# directly into a nonexistent @assays$TF@counts slot, which was never
-# valid regardless of Seurat version - there was no TF assay object here
-# to assign a slot into at all.
-tf_assay <- CreateAssay5Object(counts = tf_counts, data = tf_counts)
-merged_IPSC[["TF"]] <- tf_assay
-DefaultAssay(merged_IPSC) <- 'RNA'
-dim(merged_IPSC)
-DefaultAssay(merged_IPSC) <- 'TF'
-dim(merged_IPSC)
-merged_IPSC <- ScaleData(merged_IPSC)
-merged_IPSC_tf <- merged_IPSC
-DefaultAssay(merged_IPSC_tf) <- "TF"
-merged_IPSC_tf@assays$RNA <- NULL
-
-# -----------------------------------------------------------------------
-# Figure 6a: Regulon differential "expression" (AUC), kept SEPARATE per
-# cell line rather than collapsed across gt_line (previous version grouped
-# by interaction(Age, gt_line) internally but then summarised away gt_line
-# entirely when collapsing to one row per Regulon x Lineage - i.e. results
-# were pooled across cell lines). Now gt_line is retained as its own column
-# all the way through, and Age is the only dimension collapsed within a
-# cell line.
-# -----------------------------------------------------------------------
-lineage_df <- merged_IPSC_tf@meta.data %>%
-  tibble::rownames_to_column("cell") %>%        
-  dplyr::select(
-    cell, dp_pseudotime, up_pseudotime, A1_pseudotime, A2_pseudotime,
-    crn_pseudotime, epi_pseudotime, Age, gt_line, Protocol
-  ) %>%
-  tidyr::pivot_longer(
-    cols = ends_with("pseudotime"), names_to = "Lineage", values_to = "pseudotime"
-  ) %>%
-  dplyr::filter(!is.na(pseudotime)) %>%
-  dplyr::mutate(Lineage = sub("_pseudotime", "", Lineage))
-
-lineages <- unique(lineage_df$Lineage)
-
-merged_IPSC_tf$dummy_ident <- "all_cells"
-Idents(merged_IPSC_tf) <- "dummy_ident"
-
-der_lineage_list <- lapply(lineages, function(lin) {
-  
-  cells_lin <- lineage_df %>% dplyr::filter(Lineage == lin)
-  
-  # split by Age x gt_line, but keep gt_line as a column we group by later
-  # (previously: interaction(Age, gt_line) was used only to define FindMarkers
-  # groups, then collapsed away entirely across BOTH Age and gt_line)
-  groups <- cells_lin %>%
-    mutate(group = interaction(Age, gt_line, drop = TRUE)) %>%
-    split(.$group)
-  
-  group_results <- lapply(groups, function(g) {
-    cells_plus  <- g %>% dplyr::filter(Protocol == "plus")  %>% pull(cell)
-    cells_minus <- g %>% dplyr::filter(Protocol == "minus") %>% pull(cell)
-    if (length(cells_plus) < 3 || length(cells_minus) < 3) return(NULL)
-    
-    res <- FindMarkers(
-      object = merged_IPSC_tf[["TF"]],
-      cells.1 = cells_plus, cells.2 = cells_minus,
-      logfc.threshold = 0, min.pct = 0.25, layer = "data"   # Seurat v5: layer, not slot
-    )
-    res$gt_line <- unique(g$gt_line)[1]
-    res
-  })
-  
-  group_results <- group_results[!sapply(group_results, is.null)]
-  if (length(group_results) == 0) return(NULL)
-  
-  group_results <- lapply(group_results, function(df) {
-    df <- as.data.frame(df)
-    df$Regulon <- rownames(df)
-    df
-  })
-  
-  combined <- bind_rows(group_results, .id = "Group")
-  
-  # Collapse across Age ONLY - gt_line stays as its own grouping variable
-  collapsed <- combined %>%
-    group_by(Regulon, gt_line) %>%
-    summarise(
-      median_p_val_adj = median(p_val_adj, na.rm = TRUE),
-      max_p_val_adj    = max(p_val_adj, na.rm = TRUE),
-      mean_log2FC      = mean(avg_log2FC, na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    mutate(Lineage = lin)
-  
-  collapsed
+fig4c_cort_combined_heights <- sapply(cell_lines, function(cl) {
+  n_mod <- length(pallial_rename_maps[[cl]])
+  2 * ceiling(n_mod / 7)   # 2 stacked row-groups (dp+up, A1+A2), each needing ceiling(n_mod/7) internal rows
 })
-
-names(der_lineage_list) <- lineages
-der_lineage_results <- der_lineage_list %>%
-  discard(is.null) %>%
-  bind_rows()
-
-res_df <- der_lineage_results %>%
-  mutate(
-    negLog10P = -log10(median_p_val_adj),
-    sig = median_p_val_adj <= 0.05,
-    direction = case_when(
-      sig & mean_log2FC > 0 ~ "Positive",
-      sig & mean_log2FC < 0 ~ "Negative",
-      TRUE ~ "NotSig"
-    ),
-    LineageLabel = factor(unname(lineage_labels[Lineage]), levels = lineage_order_labeled)
+fig4c_cort_combined <- wrap_plots(fig4c_cort_list, ncol = 1, heights = fig4c_cort_combined_heights) +
+  plot_annotation(
+    title = "Effect of Protocol on Cortical Lineage Modules, per Cell Line",
+    theme = theme(plot.title = element_text(size = 24, face = "bold", margin = margin(b = 20, t = 10)))
   )
+ggsave("~/project/IPSC_2025_Data/Figure_5c_cort.png",
+       plot = fig4c_cort_combined, device = "png",
+       width = 30, height = 11 * sum(fig4c_cort_combined_heights) / length(cell_lines), dpi = 300, limitsize = FALSE)
 
-counts_df <- res_df %>%
-  dplyr::filter(sig) %>%
-  group_by(LineageLabel, gt_line, direction) %>%
-  summarise(n = n(),
-            y_pos = max(negLog10P, na.rm = TRUE) * 0.8,
-            .groups = "drop") %>%
-  mutate(x_pos = ifelse(direction == "Positive",
-                        max(res_df$mean_log2FC, na.rm=TRUE) * 0.8,
-                        min(res_df$mean_log2FC, na.rm=TRUE) * 0.8))
+fig4c_hem_combined_heights <- sapply(cell_lines, function(cl) {
+  n_mod <- length(hem_rename_maps[[cl]])
+  ceiling(n_mod / 7)   # 1 row-group (crn+epi), same facet_ncol=7 as Pallial so facet size matches
+})
+fig4c_hem_combined <- wrap_plots(fig4c_hem_list, ncol = 1, heights = fig4c_hem_combined_heights) +
+  plot_annotation(
+    title = "Effect of Protocol on Hem Lineage Modules, per Cell Line",
+    theme = theme(plot.title = element_text(size = 24, face = "bold", margin = margin(b = 20, t = 10)))
+  )
+ggsave("~/project/IPSC_2025_Data/Figure_5c_hem.png",
+       plot = fig4c_hem_combined, device = "png",
+       width = 30, height = 11 * sum(fig4c_hem_combined_heights) / length(cell_lines), dpi = 300, limitsize = FALSE)
 
-# Figure 6a - volcano, one panel per cell line (facet by Lineage only
-# within each panel), combined via wrap_plots - matching the loop+combine
-# style used in Fig 4c/4d and Fig 5b/5c.
-fig5a_list <- list()
+
+# -----------------------------------------------------------------------
+# Figure 5d: DME lollipop plots, per cell line, combined
+# -----------------------------------------------------------------------
+run_dme <- function(obj, lineage_col, lineage_value, label, wgcna_name) {
+  group1 <- obj@meta.data %>% subset(.[[lineage_col]] == lineage_value & Protocol == "plus") %>% rownames()
+  group2 <- obj@meta.data %>% subset(.[[lineage_col]] == lineage_value & Protocol == "minus") %>% rownames()
+  res <- FindDMEs(obj, barcodes1 = group1, barcodes2 = group2, test.use = "wilcox",
+                  pseudocount.use = 0.01, wgcna_name = wgcna_name)
+  res$lineage <- label
+  res
+}
+
+fig4d_cort_list <- list()
+fig4d_hem_list  <- list()
+
 for (cl in cell_lines) {
-  res_df_cl <- res_df %>% dplyr::filter(gt_line == cl)
-  counts_df_cl <- counts_df %>% dplyr::filter(gt_line == cl)
   
-  is_first  <- cl == cell_lines[1]                    # JHC1 - keeps a (bigger) title
-  is_middle <- cl == cell_lines[2]                     # KOLF2.1 - shared y-axis title
-  is_last   <- cl == cell_lines[length(cell_lines)]    # O2C3 - shared x-axis title
+  Cortical_lineage <- Cortical_lineage_list[[cl]]
+  Hem_lineage <- Hem_lineage_list[[cl]]
+  cl_wgcna <- paste0("trajectory_", cl)
   
-  p <- ggplot(res_df_cl, aes(x = mean_log2FC, y = negLog10P)) +
-    geom_point(aes(color = direction), alpha = 0.6) +
-    scale_color_manual(values = c("Positive" = "red", "Negative" = "blue", "NotSig" = "grey70")) +
-    facet_wrap(~ LineageLabel, nrow = 1, scales = "free_y") +
-    theme_bw(base_size = 13) +
+  Cortical_lineage$dp_lineage <- ifelse(!is.na(Cortical_lineage$dp_pseudotime), "dp_ExN_lineage", NA)
+  Cortical_lineage$up_lineage <- ifelse(!is.na(Cortical_lineage$up_pseudotime), "up_ExN_lineage", NA)
+  Cortical_lineage$A1_lineage <- ifelse(!is.na(Cortical_lineage$A1_pseudotime), "A1_Astrocyte_lineage", NA)
+  Cortical_lineage$A2_lineage <- ifelse(!is.na(Cortical_lineage$A2_pseudotime), "A2_Astrocyte_lineage", NA)
+  
+  DMEs_Cortical <- bind_rows(
+    run_dme(Cortical_lineage, "dp_lineage", "dp_ExN_lineage", "DP_ExN_lineage", cl_wgcna),
+    run_dme(Cortical_lineage, "up_lineage", "up_ExN_lineage", "UP_ExN_lineage", cl_wgcna),
+    run_dme(Cortical_lineage, "A1_lineage", "A1_Astrocyte_lineage", "A1_Astrocyte_lineage", cl_wgcna),
+    run_dme(Cortical_lineage, "A2_lineage", "A2_Astrocyte_lineage", "A2_Astrocyte_lineage", cl_wgcna)
+  )
+  
+  facet_order <- c("DP_ExN_lineage", "UP_ExN_lineage", "A1_Astrocyte_lineage", "A2_Astrocyte_lineage")
+  # DMEs_Cortical$module comes from FindDMEs(), which now reports the
+  # object's ACTUAL current module names directly - already the final
+  # fancy display names, since ResetModuleNames() renamed them at the
+  # source (no separate relabeling step needed here anymore).
+  # module_order is sourced from the object's actual module levels (not a
+  # hardcoded count), preserving the functional order already established
+  # by rename_modules_native()'s reordering step.
+  module_order <- setdiff(levels(GetModules(Cortical_lineage, wgcna_name = cl_wgcna)$module), "grey")
+  plot_df <- DMEs_Cortical %>%
+    filter(module %in% module_order) %>%   # drop any leftover "grey"/unassigned rows
+    mutate(sig_flag = p_val_adj < 0.05,
+           module = factor(module, levels = module_order),
+           lineage = factor(lineage, levels = facet_order))
+  
+  fig4d_cort_list[[cl]] <- ggplot(plot_df, aes(x = avg_log2FC, y = module)) +
+    geom_segment(aes(x = 0, xend = avg_log2FC, y = module, yend = module), color = "grey60", linewidth = 0.6) +
+    geom_point(aes(color = module), size = 3, data = subset(plot_df, sig_flag)) +
+    geom_text(data = subset(plot_df, !sig_flag), aes(label = "×"), color = "black", size = 5, fontface = "bold") +
+    facet_wrap(~ lineage, scales = "free_y") +
+    coord_cartesian(xlim = c(-4, 4)) +   # fixed x-scale, same across ALL cell lines (Pallial)
+    theme_minimal(base_size = 14) +
+    theme(strip.text = element_text(size = 16, face = "bold"), axis.text.y = element_text(size = 12), axis.text.x = element_text(size = 12),
+          plot.title = element_text(size = 18, face = "bold", margin = margin(b = 12)),
+          plot.margin = margin(t = 20, r = 10, b = 10, l = 10)) +
+    labs(title = paste0(cl, ": DME Lollipop Plot by lineage"), x = "avg_log2FC", y = "module")
+  
+  Hem_lineage$crn_lineage <- ifelse(!is.na(Hem_lineage$crn_pseudotime), "crn_lineage", NA)
+  Hem_lineage$epi_lineage <- ifelse(!is.na(Hem_lineage$epi_pseudotime), "epi_lineage", NA)
+  
+  DMEs_Hem <- bind_rows(
+    run_dme(Hem_lineage, "crn_lineage", "crn_lineage", "CRN_lineage", cl_wgcna),
+    run_dme(Hem_lineage, "epi_lineage", "epi_lineage", "Epithelial_lineage", cl_wgcna)
+  )
+  
+  facet_order_hem <- c("Epithelial_lineage", "CRN_lineage")
+  # Same as above: source module order directly from the object's actual
+  # (already fancy-renamed) module levels.
+  module_order_hem <- setdiff(levels(GetModules(Hem_lineage, wgcna_name = cl_wgcna)$module), "grey")
+  plot_df_hem <- DMEs_Hem %>%
+    filter(module %in% module_order_hem) %>%
+    mutate(sig_flag = p_val_adj < 0.05,
+           module = factor(module, levels = module_order_hem),
+           lineage = factor(lineage, levels = facet_order_hem))
+  
+  fig4d_hem_list[[cl]] <- ggplot(plot_df_hem, aes(x = avg_log2FC, y = module)) +
+    geom_segment(aes(x = 0, xend = avg_log2FC, y = module, yend = module), color = "grey60", linewidth = 0.6) +
+    geom_point(aes(color = module), size = 3, data = subset(plot_df_hem, sig_flag)) +
+    geom_text(data = subset(plot_df_hem, !sig_flag), aes(label = "×"), color = "black", size = 5, fontface = "bold") +
+    facet_wrap(~ lineage, scales = "free_y") +
+    coord_cartesian(xlim = c(-1.25, 1.25)) +   # fixed x-scale, same across ALL cell lines (Hem)
+    theme_minimal(base_size = 14) +
+    theme(strip.text = element_text(size = 16, face = "bold"), axis.text.y = element_text(size = 12), axis.text.x = element_text(size = 12),
+          plot.title = element_text(size = 18, face = "bold", margin = margin(b = 12)),
+          plot.margin = margin(t = 20, r = 10, b = 10, l = 10)) +
+    labs(title = paste0(cl, ": DME Lollipop Plot by lineage"), x = "avg_log2FC", y = "module")
+}
+
+fig4d_cort_combined <- wrap_plots(fig4d_cort_list, ncol = 1)
+ggsave("~/project/IPSC_2025_Data/Figure_5d_cort_lineage.tiff",
+       plot = fig4d_cort_combined, device = "tiff",
+       width = 8, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
+
+fig4d_hem_combined <- wrap_plots(fig4d_hem_list, ncol = 1)
+ggsave("~/project/IPSC_2025_Data/Figure_5d_hem_lineage.tiff",
+       plot = fig4d_hem_combined, device = "tiff",
+       width = 8, height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
+
+
+
+Cortical_lineage_list_org
+Hem_lineage_list_org
+
+# -----------------------------------------------------------------------
+# Supplementary Figure 6: Enrichr, per cell line, combined
+# -----------------------------------------------------------------------
+
+
+# NEW helper - insert just above build_supp_fig7_panel()
+build_original_order_table <- function(rename_map_cl) {
+  orig_names   <- names(rename_map_cl)
+  fancy_names  <- unname(rename_map_cl)
+  numeric_part <- as.numeric(sub(".*-M(\\d+)$", "\\1", orig_names))
+  ord <- order(numeric_part)
+  tibble(orig = orig_names[ord], fancy = fancy_names[ord])
+}
+
+# REPLACES the old build_supp_fig7_panel() definition
+build_supp_fig7_panel <- function(obj, cl_wgcna, order_table, category_lookup, title) {
+  module_order_fancy <- order_table$fancy
+  module_order_label <- order_table$orig
+  
+  dotplot <- EnrichrDotPlot(
+    obj, mods = "all", database = "GO_Biological_Process_2023",
+    n_terms = 5, term_size = 8, p_adj = FALSE, wgcna_name = cl_wgcna
+  ) +
+    scale_color_stepsn(colors = rev(viridis::magma(256))) +
+    scale_x_discrete(limits = module_order_fancy, labels = module_order_label) +
+    ggtitle(title) +
     big_text_theme +
-    labs(x = NULL, y = NULL, color = "Regulon class") +
-    theme(
-      axis.text = element_text(size = 18),
-      strip.background = element_rect(fill = "grey90"),
-      legend.position = "bottom"
-    ) +
-    geom_text(
-      data = counts_df_cl,
-      aes(x = x_pos, y = y_pos, label = n, color = direction),
-      inherit.aes = FALSE, size = 15, fontface = "bold",
-      show.legend = FALSE   # fixes legend showing a colored "a" glyph instead
-      # of a dot - geom_text's color aes was being
-      # merged into the same legend as geom_point's
-    )
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
   
-  if (is_first) {
-    p <- p +
-      labs(title = paste0(cl, ": Regulon DE by Lineage (significant counts labeled)")) +
-      theme(plot.title = element_text(size = 24, face = "bold", margin = margin(b = 10)),
-            plot.margin = margin(t = 25, r = 10, b = 10, l = 10))   # room so the bigger title isn't clipped
-  }
-  if (is_middle) {
-    p <- p +
-      labs(y = "-log10(median adj p-value)") +
-      theme(axis.title.y = element_text(size = 22, face = "bold"))
-  }
-  if (is_last) {
-    p <- p +
-      labs(x = "Average log2 Fold Change (+SDF vs -SDF)") +
-      theme(axis.title.x = element_text(size = 22, face = "bold"))
-  }
+  strip <- plot_category_strip(module_order_fancy, category_lookup)
   
-  fig5a_list[[cl]] <- p
+  dotplot / strip + plot_layout(heights = c(10, 1))
 }
 
-fig5a_combined <- wrap_plots(fig5a_list, ncol = 1)
-ggsave("~/project/IPSC_2025_Data/Figure6a.tiff",
-       plot = fig5a_combined, device = "tiff", bg = "white",
-       width = 6 * length(lineage_order), height = 5 * length(cell_lines), dpi = 300, limitsize = FALSE)
-
-
-#Figure 6b
-merged_IPSC_tf$dp_lineage <- ifelse(!is.na(merged_IPSC_tf$dp_pseudotime), "dp_ExN_lineage", NA)
-merged_IPSC_tf$up_lineage <- ifelse(!is.na(merged_IPSC_tf$up_pseudotime), "up_ExN_lineage", NA)
-merged_IPSC_tf$A1_lineage <- ifelse(!is.na(merged_IPSC_tf$A1_pseudotime), "A1_Astrocyte_lineage", NA)
-merged_IPSC_tf$A2_lineage <- ifelse(!is.na(merged_IPSC_tf$A2_pseudotime), "A2_Astrocyte_lineage", NA)
-merged_IPSC_tf$crn_lineage <- ifelse(!is.na(merged_IPSC_tf$crn_pseudotime), "crn_lineage", NA)
-merged_IPSC_tf$epi_lineage <- ifelse(!is.na(merged_IPSC_tf$epi_pseudotime), "epi_lineage", NA)
-
-get_top_regulons <- function(df, alpha = 0.05, n = 5) {
-  df %>%
-    as.data.frame() %>%
-    dplyr::filter(median_p_val_adj <= alpha) %>%
-    mutate(direction = ifelse(mean_log2FC > 0, "Up", "Down")) %>%
-    group_by(Lineage, gt_line, direction) %>%
-    slice_max(order_by = abs(mean_log2FC), n = n, with_ties = FALSE) %>%
-    ungroup()
-}
-
-top_regulons <- get_top_regulons(der_lineage_results, n = 10)
-dim(top_regulons)
-
-# -----------------------------------------------------------------------
-# SHARED top-10-positive / top-10-negative regulons: a SINGLE fixed list
-# (not computed separately per cell line), so every cell line's heatmap
-# shows the exact same regulons in the exact same row order and rows line
-# up for direct visual comparison.
-#
-# NOTE: requiring formal significance (median_p_val_adj <= 0.05) in EVERY
-# SINGLE LINEAGE simultaneously was far too strict - zero regulons passed
-# out of 262 candidates present in all 3 cell lines. Per request, this is
-# now purely a RANKING (no significance gate, no fixed "top 10 of each
-# line" ceiling) - a regulon qualifies as "shared" if it's present in all
-# cell lines with a CONSISTENT effect direction across them (its overall
-# Protocol effect, collapsed across lineage), and the top n by average
-# log2FC magnitude are taken regardless of how far down the full ranked
-# list that falls.
-# -----------------------------------------------------------------------
-get_shared_top_regulons <- function(df, cell_lines, n = 10) {
-  per_line <- df %>%
-    as.data.frame() %>%
-    dplyr::group_by(Regulon, gt_line) %>%
-    dplyr::summarise(
-      mean_log2FC = mean(mean_log2FC, na.rm = TRUE),
-      .groups = "drop"
-    )
-  
-  shared <- per_line %>%
-    dplyr::group_by(Regulon) %>%
-    dplyr::filter(
-      dplyr::n_distinct(gt_line) == length(cell_lines),    # present in every cell line
-      dplyr::n_distinct(sign(mean_log2FC)) == 1             # same direction in every cell line
-    ) %>%
-    dplyr::summarise(overall_log2FC = mean(mean_log2FC), .groups = "drop")
-  
-  pos <- shared %>% dplyr::filter(overall_log2FC > 0) %>% dplyr::slice_max(overall_log2FC, n = n, with_ties = FALSE)
-  neg <- shared %>% dplyr::filter(overall_log2FC < 0) %>% dplyr::slice_min(overall_log2FC, n = n, with_ties = FALSE)
-  
-  list(regulons = c(pos$Regulon, neg$Regulon), pos = pos$Regulon, neg = neg$Regulon)
-}
-
-shared_top <- get_shared_top_regulons(der_lineage_results, cell_lines, n = 10)
-shared_regulon_order <- shared_top$regulons   # fixed row order used for EVERY cell line's heatmap
-cat("Shared top-10 positive regulons:\n"); print(shared_top$pos)
-cat("Shared top-10 negative regulons:\n"); print(shared_top$neg)
-
-lineage_df <- merged_IPSC_tf@meta.data %>%
-  tibble::rownames_to_column("cell") %>%
-  dplyr::select(
-    cell, dp_pseudotime, up_pseudotime, A1_pseudotime, A2_pseudotime,
-    crn_pseudotime, epi_pseudotime, Protocol, gt_line
-  ) %>%
-  tidyr::pivot_longer(
-    cols = ends_with("pseudotime"), names_to = "Lineage", values_to = "pseudotime"
-  ) %>%
-  dplyr::filter(!is.na(pseudotime)) %>%
-  dplyr::mutate(Lineage = sub("_pseudotime", "", Lineage))
-
-lineage_df <- lineage_df %>%
-  mutate(Protocol_Lineage = paste(Protocol, Lineage, sep = "_"))
-
-auc_mat <- GetAssayData(merged_IPSC_tf, assay = "TF", layer = "data")   # Seurat v5: layer, not slot
-
-# AUC heatmap builder - uses the FIXED shared_regulon_order for every cell
-# line (rather than deriving its own regulon list per call), and no longer
-# sets its own title/main (a single shared title is drawn once above the
-# combined row of heatmaps instead).
-plot_auc_heatmap_lineage <- function(regulon_order, auc_df) {
-  desired_order <- c(
-    "minus_A1",  "plus_A1", "minus_A2",  "plus_A2",
-    "minus_dp",  "plus_dp", "minus_up",  "plus_up",
-    "minus_crn", "plus_crn", "minus_epi", "plus_epi"
-  )
-  regulons <- regulon_order[regulon_order %in% colnames(auc_df)]
-  if (length(regulons) == 0) return(NULL)
-  
-  auc_df <- auc_df %>%
-    dplyr::filter(Protocol_Lineage %in% desired_order) %>%
-    mutate(Protocol_Lineage = factor(Protocol_Lineage, levels = desired_order))
-  
-  mat <- auc_df %>%
-    arrange(Protocol_Lineage) %>%
-    as.data.frame() %>%
-    column_to_rownames("Protocol_Lineage") %>%
-    dplyr::select(all_of(regulons)) %>%
-    t()
-  # Force BOTH the fixed row order (regulons) AND the fixed column order
-  # (Protocol_Lineage combos, from desired_order) - some regulons OR some
-  # Protocol/Lineage combos may be entirely absent for a given cell line
-  # (e.g. zero cells of a given lineage under one protocol), which
-  # previously shrank that cell line's column count silently and shifted
-  # every subsequent column/spacer out of alignment with the other cell
-  # lines' heatmaps. Reindexing to the full desired_order guarantees every
-  # heatmap has the identical column count/order, with any truly-missing
-  # combo rendered as a genuine NA (blank) cell instead of disappearing.
-  mat_full <- matrix(NA_real_, nrow = length(regulon_order), ncol = length(desired_order),
-                     dimnames = list(regulon_order, desired_order))
-  common_regs <- intersect(rownames(mat), regulon_order)
-  common_cols <- intersect(colnames(mat), desired_order)
-  mat_full[common_regs, common_cols] <- mat[common_regs, common_cols]
-  mat <- mat_full
-  
-  new_mat <- mat
-  spacer_cols <- integer(0)
-  for (i in seq_len(ncol(mat))) {
-    if (i == 1) {
-      new_mat <- mat[, i, drop = FALSE]
-    } else {
-      new_mat <- cbind(new_mat, mat[, i, drop = FALSE])
-    }
-    if (i %% 2 == 0 && i < ncol(mat)) {
-      spacer_name <- paste0("spacer_", i)
-      new_mat <- cbind(new_mat, rep(NA, nrow(mat)))
-      colnames(new_mat)[ncol(new_mat)] <- spacer_name
-      spacer_cols <- c(spacer_cols, ncol(new_mat))
-    }
-  }
-  
-  # Column labels: "-SDF"/"+SDF" instead of "minus"/"plus", and the
-  # lineage codes translated to Figure 5's naming convention for
-  # consistency, blank for spacer columns (rather than "spacer_1", etc).
-  # NOTE: this renaming is applied ONLY to the display labels here - the
-  # `desired_order` used above for filtering/leveling must stay as the
-  # actual values in Protocol_Lineage ("minus_A1" etc.) or the filter step
-  # silently matches zero rows (which is what caused the earlier error).
-  lineage_display_map <- c(
-    A1  = "A1_Astrocyte_lineage",
-    A2  = "A2_Astrocyte_lineage",
-    dp  = "DP_ExN_lineage",
-    up  = "UP_ExN_lineage",
-    crn = "CRN_lineage",
-    epi = "Epithelial_lineage"
-  )
-  col_labels <- colnames(new_mat)
-  is_spacer <- seq_along(col_labels) %in% spacer_cols
-  for (i in seq_along(col_labels)) {
-    if (is_spacer[i]) { col_labels[i] <- ""; next }
-    parts <- strsplit(col_labels[i], "_", fixed = TRUE)[[1]]
-    protocol <- parts[1]
-    lineage_code <- paste(parts[-1], collapse = "_")
-    protocol_label <- dplyr::case_when(
-      protocol == "minus" ~ "-SDF",
-      protocol == "plus"  ~ "+SDF",
-      TRUE ~ protocol
-    )
-    lineage_label <- if (lineage_code %in% names(lineage_display_map)) {
-      lineage_display_map[[lineage_code]]
-    } else {
-      lineage_code
-    }
-    col_labels[i] <- paste0(protocol_label, " ", lineage_label)
-  }
-  
-  # Explicit :: needed - ComplexHeatmap (loaded elsewhere in this pipeline)
-  # also exports a pheatmap() compatibility wrapper that returns an S4
-  # Heatmap object instead of the classic list-based pheatmap object (with
-  # a $gtable slot), which breaks any downstream $gtable access. Force the
-  # real pheatmap package's function. main = NA (not NULL - NA is what
-  # pheatmap's internal is.na() check requires to skip the title cleanly).
-  pheatmap::pheatmap(
-    new_mat, scale = "none", cluster_rows = FALSE, cluster_cols = FALSE,
-    na_col = "white", border_color = NA, fontsize = 18,
-    labels_col = col_labels, fontsize_col = 20, angle_col = 315,
-    main = NA, silent = TRUE
-  )
-}
-
-heatmap_list <- list()
+# REPLACES the old for-loop body (note the two new order_table lines)
+fig_s7_cort_list <- list()
+fig_s7_hem_list  <- list()
 for (cl in cell_lines) {
-  auc_df_cl <- lineage_df %>%
-    filter(gt_line == cl) %>%
-    dplyr::select(cell, Protocol_Lineage) %>%
-    left_join(as.data.frame(t(auc_mat)) %>% tibble::rownames_to_column("cell"), by = "cell") %>%
-    dplyr::group_by(Protocol_Lineage) %>%
-    dplyr::summarise(across(-cell, mean), .groups = "drop")
+  cl_wgcna <- paste0("trajectory_", cl)
   
-  hm <- plot_auc_heatmap_lineage(shared_regulon_order, auc_df_cl)
-  if (!is.null(hm)) {
-    # Bigger cell-line label above each heatmap (own text only - the
-    # shared "Average AUC..." title is added once, separately, below).
-    hm$gtable <- gridExtra::arrangeGrob(hm$gtable, top = grid::textGrob(cl, gp = grid::gpar(fontsize = 22, fontface = "bold")))
-    heatmap_list[[cl]] <- hm$gtable
-  }
-}
-
-heatmap_row <- plot_grid(plotlist = heatmap_list, nrow = 1)
-
-# Shared title drawn ONCE, in its own reserved band above the row of
-# heatmaps (rather than repeated per-panel or crammed onto the middle
-# panel's own label, which would risk colliding with that panel's cell-
-# line name) - guaranteed non-overlapping space, same pattern used
-# elsewhere in this pipeline for shared titles/legends.
-shared_title <- ggdraw() +
-  draw_label("Average AUC per Protocol × Lineage for Top Regulons",
-             fontface = "bold", size = 22, x = 0.5, hjust = 0.5)
-
-p_2 <- plot_grid(shared_title, heatmap_row, ncol = 1, rel_heights = c(0.08, 1))
-
-# NOTE: R's tiff() device has known quirks compositing transparency in
-# nested grid/cowplot viewports - fully-NA heatmap regions rendered BLACK
-# instead of the specified na_col="white" when saved directly as TIFF,
-# even though an isolated pheatmap test confirmed na_col works correctly
-# on its own. Saving as PNG first (which handles this correctly, verified
-# via that same isolated test) and converting to TIFF afterward via
-# magick avoids the tiff() device's compositing issue entirely.
-png_path_5b <- "~/project/IPSC_2025_Data/Figure6b.png"
-tiff_path_5b <- "~/project/IPSC_2025_Data/Figure6b.png"
-ggsave(png_path_5b,
-       plot = p_2, device = "png", bg = "white",
-       width = 10 * length(cell_lines), height = 20, dpi = 300, limitsize = FALSE)
-magick::image_write(magick::image_read(png_path_5b), path = tiff_path_5b, format = "png")
-
-#Figure 6b — ALTERNATIVE: top 3 up / top 3 down per cell line (not shared)
-# -----------------------------------------------------------------------
-# Same collapsing logic as get_shared_top_regulons() (each regulon's
-# OVERALL Protocol effect - mean_log2FC averaged across lineage), but
-# selected INDEPENDENTLY per cell line rather than requiring the regulon
-# to be present/consistent-direction across all three. This means each
-# cell line's panel can show DIFFERENT regulons in a DIFFERENT row order -
-# that's the deliberate tradeoff vs. the shared-list version's guaranteed
-# row alignment for cross-line comparison.
-# -----------------------------------------------------------------------
-get_pooled_top_regulons <- function(df, n = 3) {
-  top_by_line_lineage <- df %>%
-    as.data.frame() %>%
-    dplyr::group_by(gt_line, Lineage) %>%
-    dplyr::group_modify(~ {
-      pos <- dplyr::slice_max(.x, mean_log2FC, n = n, with_ties = FALSE)
-      neg <- dplyr::slice_min(.x, mean_log2FC, n = n, with_ties = FALSE)
-      dplyr::bind_rows(pos, neg)
-    }) %>%
-    dplyr::ungroup()
+  cort_order <- build_original_order_table(pallial_rename_maps[[cl]])
+  hem_order  <- build_original_order_table(hem_rename_maps[[cl]])
   
-  unique(top_by_line_lineage$Regulon)
-}
-
-pooled_regulon_order <- get_pooled_top_regulons(der_lineage_results, n = 3)
-cat("Pooled regulon count (union across all cell lines/lineages):", length(pooled_regulon_order), "\n")
-print(pooled_regulon_order)
-
-# Reuses lineage_df, auc_mat, and plot_auc_heatmap_lineage() from the
-# block above - SAME pooled_regulon_order passed to every cell line, so
-# all panels show identical rows in identical order.
-heatmap_list_alt <- list()
-for (cl in cell_lines) {
-  auc_df_cl <- lineage_df %>%
-    filter(gt_line == cl) %>%
-    dplyr::select(cell, Protocol_Lineage) %>%
-    left_join(as.data.frame(t(auc_mat)) %>% tibble::rownames_to_column("cell"), by = "cell") %>%
-    dplyr::group_by(Protocol_Lineage) %>%
-    dplyr::summarise(across(-cell, mean), .groups = "drop")
-  
-  hm <- plot_auc_heatmap_lineage(pooled_regulon_order, auc_df_cl)
-  if (!is.null(hm)) {
-    hm$gtable <- gridExtra::arrangeGrob(hm$gtable, top = grid::textGrob(cl, gp = grid::gpar(fontsize = 22, fontface = "bold")))
-    heatmap_list_alt[[cl]] <- hm$gtable
-  }
-}
-
-heatmap_row_alt <- plot_grid(plotlist = heatmap_list_alt, nrow = 1)
-
-shared_title_alt <- ggdraw() +
-  draw_label("Average AUC per Protocol × Lineage, Pooled Top 3 Up/Down Regulons per Cell Line × Lineage",
-             fontface = "bold", size = 22, x = 0.5, hjust = 0.5)
-
-p_2_alt <- plot_grid(shared_title_alt, heatmap_row_alt, ncol = 1, rel_heights = c(0.08, 1))
-
-png_path_5b_alt <- "~/project/IPSC_2025_Data/Figure6b_top3_per_line.png"
-max_n_regulons <- length(pooled_regulon_order)
-plot_height_alt <- 4 + max_n_regulons * 0.35   # tune the 0.35-per-row multiplier if rows look cramped/sparse
-
-ggsave(png_path_5b_alt,
-       plot = p_2_alt, device = "png", bg = "white",
-       width = 10 * length(cell_lines), height = plot_height_alt, dpi = 300, limitsize = FALSE)
-
-# -----------------------------------------------------------------------
-# Figure 6c: regulon-pseudotime correlation, kept SEPARATE per cell line
-# (previously run only on the "minus" subset pooled across all lines).
-# Consistent lineage labels applied, matching Panels A/B.
-# -----------------------------------------------------------------------
-fig5c_list <- list()
-legend_source_plot <- NULL   # captured from one panel, used to build ONE shared (larger) legend
-
-for (cl in cell_lines) {
-  
-  merged_minus <- subset(merged_IPSC_tf, Protocol == "minus" & gt_line == cl)
-  merged_minus@misc$SCENIC$RegulonsAUC <- merged_minus@misc$SCENIC$RegulonsAUC[colnames(merged_minus),]
-  tf_auc <- merged_minus@misc$SCENIC$RegulonsAUC
-  tf_auc <- tf_auc %>% mutate(across(everything(), ~ replace_na(., 0)))
-  tf_counts <- t(tf_auc)
-  # Seurat v5 Assay5: update layers via LayerData<-(), not @counts<-/@data<-
-  LayerData(merged_minus, assay = "TF", layer = "counts") <- tf_counts
-  LayerData(merged_minus, assay = "TF", layer = "data") <- tf_counts
-  regulon_mat <- t(LayerData(merged_minus, assay = "TF", layer = "counts"))
-  
-  pseudotimes <- list(
-    dp  = merged_minus$dp_pseudotime, up  = merged_minus$up_pseudotime,
-    A1  = merged_minus$A1_pseudotime, A2  = merged_minus$A2_pseudotime,
-    epi = merged_minus$epi_pseudotime, crn = merged_minus$crn_pseudotime
+  fig_s7_cort_list[[cl]] <- build_supp_fig7_panel(
+    Cortical_lineage_list[[cl]], cl_wgcna, cort_order, module_categories_pallial, paste0(cl, ": Cortical")
   )
-  correlate_regulons <- function(mat, pseudotime) {
-    apply(mat, 2, function(reg) {
-      # Guard against too few finite paired observations (e.g. a lineage
-      # with very few or zero cells within this cell line x protocol
-      # subset, since pseudotime is NA for any cell not on that lineage) -
-      # cor.test() errors with "not enough finite observations" below 2
-      # pairs, and needs >=3 for a meaningful t-based p-value anyway.
-      complete_idx <- is.finite(reg) & is.finite(pseudotime)
-      if (sum(complete_idx) < 3) {
-        # NOTE: names must exactly match the success branch below -
-        # ct$estimate is already named "cor" (pearson), so c(cor=...)
-        # produces the compound name "cor.cor", not "cor". Downstream code
-        # references cor_results2$cor.cor directly, so this NA fallback
-        # must match that naming exactly or apply()'s matrix assembly
-        # could silently produce inconsistent column names.
-        return(c(cor.cor = NA_real_, pval = NA_real_))
-      }
-      ct <- cor.test(reg[complete_idx], pseudotime[complete_idx], method = "pearson")
-      c(cor = ct$estimate, pval = ct$p.value)
-    }) %>% t() %>% as.data.frame()
-  }
-  cor_results <- lapply(names(pseudotimes), function(pt) {
-    df <- correlate_regulons(regulon_mat, pseudotimes[[pt]])
-    df$Regulon <- rownames(df)
-    df$Pseudotime <- pt
-    df
-  }) %>% bind_rows()
-  
-  cor_results2 <- cor_results %>%
-    left_join(
-      der_lineage_results %>% filter(gt_line == cl) %>%
-        dplyr::select(Regulon, Lineage, median_p_val_adj, max_p_val_adj, mean_log2FC),
-      by = c("Regulon", "Pseudotime" = "Lineage")
-    )
-  
-  threshold_cor <- 0
-  cor_results2 <- cor_results2 %>%
-    mutate(
-      de_dir = case_when(
-        !is.na(median_p_val_adj) & median_p_val_adj <= 0.05 & mean_log2FC > 0 ~ "up",
-        !is.na(median_p_val_adj) & median_p_val_adj <= 0.05 & mean_log2FC < 0 ~ "down",
-        TRUE ~ "ns"
-      ),
-      is_green = case_when(de_dir == "down" & cor.cor < -threshold_cor ~ TRUE, de_dir == "up" & cor.cor > threshold_cor ~ TRUE, TRUE ~ FALSE),
-      is_red   = case_when(de_dir == "down" & cor.cor >  threshold_cor ~ TRUE, de_dir == "up" & cor.cor < -threshold_cor ~ TRUE, TRUE ~ FALSE),
-      color_group = case_when(is_green ~ "lineage_aligned", is_red ~ "lineage_opposed", TRUE ~ "neutral"),
-      PseudotimeLabel = factor(unname(lineage_labels[Pseudotime]), levels = lineage_order_labeled)
-    )
-  
-  cor_results_plot <- cor_results2 %>% dplyr::filter(!is.na(mean_log2FC))
-  green_counts <- cor_results2 %>% dplyr::filter(is_green) %>% dplyr::count(PseudotimeLabel, name = "n_green")
-  red_counts   <- cor_results2 %>% dplyr::filter(is_red) %>% dplyr::count(PseudotimeLabel, name = "n_red")
-  
-  label_genes_epi_crn <- c("TCF7L1(+)", "OTX1(+)")
-  label_genes_dp_up_A1_A2 <- c("E2F2(+)", "HMGA2(+)", "NFIA(+)", "NFIX(+)", "NFIC(+)", "POU3F1(+)")
-  #label_genes_dp_up_A1_A2 <- c("POU3F1(+)", "STAT3(+)", "NFIA(+)", "NFIX(+)", "NFIC(+)")
-  
-  is_first  <- cl == cell_lines[1]                    # JHC1
-  is_middle <- cl == cell_lines[2]                     # KOLF2.1 - shared y-axis title
-  is_last   <- cl == cell_lines[length(cell_lines)]    # O2C3 - shared x-axis title
-  
-  p <- ggplot(cor_results_plot, aes(x = cor.cor, y = mean_log2FC)) +
-    geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
-    geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
-    geom_point(aes(color = color_group), alpha = 0.7, size = 1.8) +
-    scale_color_manual(values = c("lineage_aligned" = "forestgreen", "lineage_opposed" = "firebrick", "neutral" = "grey70")) +
-    facet_wrap(~ PseudotimeLabel, scales = "free", nrow = 1) +
-    geom_point(data = subset(cor_results_plot, Regulon %in% label_genes_dp_up_A1_A2 &
-                               Pseudotime %in% c("dp", "up", "A1", "A2")), color = "black", size = 2.5) +
-    geom_text_repel(data = subset(cor_results_plot, Regulon %in% label_genes_dp_up_A1_A2 &
-                                    Pseudotime %in% c("dp", "up", "A1", "A2")),
-                    aes(label = Regulon), size = 6, color = "black", max.overlaps = Inf,
-                    box.padding = 0.4, point.padding = 0.3, segment.color = "black",
-                    segment.size = 0.4, min.segment.length = 0) +
-    geom_point(data = subset(cor_results_plot, Regulon %in% label_genes_epi_crn &
-                               Pseudotime %in% c("crn", "epi")), color = "black", size = 2.5) +
-    geom_text_repel(data = subset(cor_results_plot, Regulon %in% label_genes_epi_crn &
-                                    Pseudotime %in% c("crn", "epi")),
-                    aes(label = Regulon), size = 6, color = "black", max.overlaps = Inf,
-                    box.padding = 0.4, point.padding = 0.3, segment.color = "black",
-                    segment.size = 0.4, min.segment.length = 0) +
-    geom_text(data = green_counts, aes(x = -Inf, y = Inf, label = paste0("aligned = ", n_green)),
-              hjust = -0.1, vjust = 2.2, size = 6, color = "forestgreen", inherit.aes = FALSE) +
-    geom_text(data = red_counts, aes(x = -Inf, y = Inf, label = paste0("opposed = ", n_red)),
-              hjust = -0.1, vjust = 3.8, size = 6, color = "firebrick", inherit.aes = FALSE) +
-    labs(
-      x = NULL, y = NULL, color = "Regulon class",
-      title = paste0(cl, ": Regulon alignment of synchronized response with lineage dynamics")
-    ) +
-    theme_bw(base_size = 13) + big_text_theme +
-    theme(
-      strip.background = element_rect(fill = "grey90"),
-      axis.text = element_text(size = 15),
-      plot.title = element_text(size = 20, face = "bold", margin = margin(b = 10)),
-      plot.margin = margin(t = 20, r = 10, b = 10, l = 10),   # room so bigger titles aren't clipped
-      legend.position = "none"    # shared legend added once at combine time instead
-    )
-  
-  if (is_middle) {
-    p <- p + labs(y = "Lineage-level Average log2FC (+SDF vs -SDF protocol)") +
-      theme(axis.title.y = element_text(size = 20, face = "bold"))
-  }
-  if (is_last) {
-    p <- p + labs(x = "Pearson Correlation with pseudotime") +
-      theme(axis.title.x = element_text(size = 20, face = "bold"))
-  }
-  
-  # Capture a legend from ANY one panel (with a bigger legend theme applied)
-  # to build the single shared legend added once at combine time.
-  if (is.null(legend_source_plot)) {
-    legend_source_plot <- p +
-      theme(legend.position = "bottom",
-            legend.text = element_text(size = 16),
-            legend.title = element_text(size = 18, face = "bold"),
-            legend.key.size = unit(1.2, "cm"))
-  }
-  
-  fig5c_list[[cl]] <- p
-}
-
-fig5c_legend <- cowplot::get_legend(legend_source_plot)
-fig5c_combined <- plot_grid(
-  wrap_plots(fig5c_list, ncol = 1),
-  fig5c_legend,
-  ncol = 1, rel_heights = c(1, 0.06)
-)
-ggsave("~/project/IPSC_2025_Data/Figure6c.png",
-       plot = fig5c_combined, device = "png", bg = "white",
-       width = 24, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
-
-# -----------------------------------------------------------------------
-# Final combined Figure 5: layout (A / C) | B - A stacked above C in a
-# left column, B occupying a right column spanning the same total height.
-# Since both columns share the SAME overall height by construction, A and
-# C each naturally get half of B's height (i.e. B ends up ~2x the height
-# of A and ~2x the height of C), without needing a special ratio.
-# -----------------------------------------------------------------------
-AC_stack <- cowplot::plot_grid(fig5a_combined, fig5c_combined, ncol = 1, rel_heights = c(1, 1),
-                               labels = c("A", "C"), label_size = 24)
-fig5_final <- cowplot::plot_grid(AC_stack, p_2, nrow = 1, rel_widths = c(1, 1),
-                                 labels = c("", "B"), label_size = 24)
-png_path_final <- "~/project/IPSC_2025_Data/Figure6_combined.png"
-tiff_path_final <- "~/project/IPSC_2025_Data/Figure6_combined.tiff"
-ggsave(png_path_final,
-       plot = fig5_final, device = "png", bg = "white",
-       width = 40, height = 24 * length(cell_lines), dpi = 300, limitsize = FALSE)
-magick::image_write(magick::image_read(png_path_final), path = tiff_path_final, format = "tiff")
-
-
-
-
-
-
-
-
-
------------------------------------------------------------------------
-  # Figure 5c: regulon-pseudotime correlation, kept SEPARATE per cell line
-  # (previously run only on the "minus" subset pooled across all lines).
-  # Consistent lineage labels applied, matching Panels A/B.
-  # -----------------------------------------------------------------------
-fig5c_list <- list()
-legend_source_plot <- NULL   # captured from one panel, used to build ONE shared (larger) legend
-
-for (cl in cell_lines) {
-  
-  merged_minus <- subset(merged_IPSC_tf, Protocol == "minus" & gt_line == cl)
-  merged_minus@misc$SCENIC$RegulonsAUC <- merged_minus@misc$SCENIC$RegulonsAUC[colnames(merged_minus),]
-  tf_auc <- merged_minus@misc$SCENIC$RegulonsAUC
-  tf_auc <- tf_auc %>% mutate(across(everything(), ~ replace_na(., 0)))
-  tf_counts <- t(tf_auc)
-  # Seurat v5 Assay5: update layers via LayerData<-(), not @counts<-/@data<-
-  LayerData(merged_minus, assay = "TF", layer = "counts") <- tf_counts
-  LayerData(merged_minus, assay = "TF", layer = "data") <- tf_counts
-  regulon_mat <- t(LayerData(merged_minus, assay = "TF", layer = "counts"))
-  
-  pseudotimes <- list(
-    dp  = merged_minus$dp_pseudotime, up  = merged_minus$up_pseudotime,
-    A1  = merged_minus$A1_pseudotime, A2  = merged_minus$A2_pseudotime,
-    epi = merged_minus$epi_pseudotime, crn = merged_minus$crn_pseudotime
+  fig_s7_hem_list[[cl]] <- build_supp_fig7_panel(
+    Hem_lineage_list[[cl]], cl_wgcna, hem_order, module_categories_hem, paste0(cl, ": Hem")
   )
-  correlate_regulons <- function(mat, pseudotime) {
-    apply(mat, 2, function(reg) {
-      # Guard against too few finite paired observations (e.g. a lineage
-      # with very few or zero cells within this cell line x protocol
-      # subset, since pseudotime is NA for any cell not on that lineage) -
-      # cor.test() errors with "not enough finite observations" below 2
-      # pairs, and needs >=3 for a meaningful t-based p-value anyway.
-      complete_idx <- is.finite(reg) & is.finite(pseudotime)
-      if (sum(complete_idx) < 3) {
-        # NOTE: names must exactly match the success branch below -
-        # ct$estimate is already named "cor" (pearson), so c(cor=...)
-        # produces the compound name "cor.cor", not "cor". Downstream code
-        # references cor_results2$cor.cor directly, so this NA fallback
-        # must match that naming exactly or apply()'s matrix assembly
-        # could silently produce inconsistent column names.
-        return(c(cor.cor = NA_real_, pval = NA_real_))
-      }
-      ct <- cor.test(reg[complete_idx], pseudotime[complete_idx], method = "pearson")
-      c(cor = ct$estimate, pval = ct$p.value)
-    }) %>% t() %>% as.data.frame()
-  }
-  cor_results <- lapply(names(pseudotimes), function(pt) {
-    df <- correlate_regulons(regulon_mat, pseudotimes[[pt]])
-    df$Regulon <- rownames(df)
-    df$Pseudotime <- pt
-    df
-  }) %>% bind_rows()
-  
-  cor_results2 <- cor_results %>%
-    left_join(
-      der_lineage_results %>% filter(gt_line == cl) %>%
-        dplyr::select(Regulon, Lineage, median_p_val_adj, max_p_val_adj, mean_log2FC),
-      by = c("Regulon", "Pseudotime" = "Lineage")
-    )
-  
-  threshold_cor <- 0
-  cor_results2 <- cor_results2 %>%
-    mutate(
-      de_dir = case_when(
-        !is.na(median_p_val_adj) & median_p_val_adj <= 0.05 & mean_log2FC > 0 ~ "up",
-        !is.na(median_p_val_adj) & median_p_val_adj <= 0.05 & mean_log2FC < 0 ~ "down",
-        TRUE ~ "ns"
-      ),
-      is_green = case_when(de_dir == "down" & cor.cor < -threshold_cor ~ TRUE, de_dir == "up" & cor.cor > threshold_cor ~ TRUE, TRUE ~ FALSE),
-      is_red   = case_when(de_dir == "down" & cor.cor >  threshold_cor ~ TRUE, de_dir == "up" & cor.cor < -threshold_cor ~ TRUE, TRUE ~ FALSE),
-      color_group = case_when(is_green ~ "lineage_aligned", is_red ~ "lineage_opposed", TRUE ~ "neutral"),
-      PseudotimeLabel = factor(unname(lineage_labels[Pseudotime]), levels = lineage_order_labeled)
-    )
-  
-  cor_results_plot <- cor_results2 %>% dplyr::filter(!is.na(mean_log2FC))
-  green_counts <- cor_results2 %>% dplyr::filter(is_green) %>% count(PseudotimeLabel, name = "n_green")
-  red_counts   <- cor_results2 %>% dplyr::filter(is_red) %>% count(PseudotimeLabel, name = "n_red")
-  
-  label_genes_epi_crn <- c("TCF7L1(+)", "OTX1(+)")
-  label_genes_dp_up_A1_A2 <- c("POU3F1(+)", "STAT3(+)", "NFIA(+)", "NFIX(+)", "NFIC(+)")
-  
-  is_first  <- cl == cell_lines[1]                    # JHC1
-  is_middle <- cl == cell_lines[2]                     # KOLF2.1 - shared y-axis title
-  is_last   <- cl == cell_lines[length(cell_lines)]    # O2C3 - shared x-axis title
-  
-  p <- ggplot(cor_results_plot, aes(x = cor.cor, y = mean_log2FC)) +
-    geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
-    geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
-    geom_point(aes(color = color_group), alpha = 0.7, size = 1.8) +
-    scale_color_manual(values = c("lineage_aligned" = "forestgreen", "lineage_opposed" = "firebrick", "neutral" = "grey70")) +
-    facet_wrap(~ PseudotimeLabel, scales = "free", nrow = 1) +
-    geom_point(data = subset(cor_results_plot, Regulon %in% label_genes_dp_up_A1_A2 &
-                               Pseudotime %in% c("dp", "up", "A1", "A2")), color = "black", size = 2.5) +
-    geom_text_repel(data = subset(cor_results_plot, Regulon %in% label_genes_dp_up_A1_A2 &
-                                    Pseudotime %in% c("dp", "up", "A1", "A2")),
-                    aes(label = Regulon), size = 6, color = "black", max.overlaps = Inf,
-                    box.padding = 0.4, point.padding = 0.3, segment.color = "black",
-                    segment.size = 0.4, min.segment.length = 0) +
-    geom_point(data = subset(cor_results_plot, Regulon %in% label_genes_epi_crn &
-                               Pseudotime %in% c("crn", "epi")), color = "black", size = 2.5) +
-    geom_text_repel(data = subset(cor_results_plot, Regulon %in% label_genes_epi_crn &
-                                    Pseudotime %in% c("crn", "epi")),
-                    aes(label = Regulon), size = 6, color = "black", max.overlaps = Inf,
-                    box.padding = 0.4, point.padding = 0.3, segment.color = "black",
-                    segment.size = 0.4, min.segment.length = 0) +
-    geom_text(data = green_counts, aes(x = -Inf, y = Inf, label = paste0("aligned = ", n_green)),
-              hjust = -0.1, vjust = 2.2, size = 6, color = "forestgreen", inherit.aes = FALSE) +
-    geom_text(data = red_counts, aes(x = -Inf, y = Inf, label = paste0("opposed = ", n_red)),
-              hjust = -0.1, vjust = 3.8, size = 6, color = "firebrick", inherit.aes = FALSE) +
-    labs(
-      x = NULL, y = NULL, color = "Regulon class",
-      title = paste0(cl, ": Regulon alignment of synchronized response with lineage dynamics")
-    ) +
-    theme_bw(base_size = 13) + big_text_theme +
-    theme(
-      strip.background = element_rect(fill = "grey90"),
-      axis.text = element_text(size = 15),
-      plot.title = element_text(size = 20, face = "bold", margin = margin(b = 10)),
-      plot.margin = margin(t = 20, r = 10, b = 10, l = 10),   # room so bigger titles aren't clipped
-      legend.position = "none"    # shared legend added once at combine time instead
-    )
-  
-  if (is_middle) {
-    p <- p + labs(y = "Lineage-level Average log2FC (+SDF vs -SDF protocol)") +
-      theme(axis.title.y = element_text(size = 20, face = "bold"))
-  }
-  if (is_last) {
-    p <- p + labs(x = "Pearson Correlation with pseudotime") +
-      theme(axis.title.x = element_text(size = 20, face = "bold"))
-  }
-  
-  # Capture a legend from ANY one panel (with a bigger legend theme applied)
-  # to build the single shared legend added once at combine time.
-  if (is.null(legend_source_plot)) {
-    legend_source_plot <- p +
-      theme(legend.position = "bottom",
-            legend.text = element_text(size = 16),
-            legend.title = element_text(size = 18, face = "bold"),
-            legend.key.size = unit(1.2, "cm"))
-  }
-  
-  fig5c_list[[cl]] <- p
 }
 
-fig5c_legend <- cowplot::get_legend(legend_source_plot)
-fig5c_combined <- plot_grid(
-  wrap_plots(fig5c_list, ncol = 1),
-  fig5c_legend,
-  ncol = 1, rel_heights = c(1, 0.06)
-)
-ggsave("~/project/IPSC_2025_Data/Figure5c.tiff",
-       plot = fig5c_combined, device = "tiff", bg = "white",
-       width = 24, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
+# ggsave() calls stay exactly as before - unchanged
+fig_s7_cort_combined <- wrap_plots(fig_s7_cort_list, ncol = 1)
+ggsave("~/project/IPSC_2025_Data/Supplmental_Figure6_pallial_lineages.png",
+       plot = fig_s7_cort_combined, device = "png",
+       width = 10, height = 11 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
-# -----------------------------------------------------------------------
-# Final combined Figure 5: layout (A / C) | B - A stacked above C in a
-# left column, B occupying a right column spanning the same total height.
-# Since both columns share the SAME overall height by construction, A and
-# C each naturally get half of B's height (i.e. B ends up ~2x the height
-# of A and ~2x the height of C), without needing a special ratio.
-# -----------------------------------------------------------------------
-AC_stack <- cowplot::plot_grid(fig5a_combined, fig5c_combined, ncol = 1, rel_heights = c(1, 1),
-                               labels = c("A", "C"), label_size = 24)
-fig5_final <- cowplot::plot_grid(AC_stack, p_2, nrow = 1, rel_widths = c(1, 1),
-                                 labels = c("", "B"), label_size = 24)
-png_path_final <- "~/project/IPSC_2025_Data/Figure5_combined.png"
-tiff_path_final <- "~/project/IPSC_2025_Data/Figure5_combined.tiff"
-ggsave(png_path_final,
-       plot = fig5_final, device = "png", bg = "white",
-       width = 40, height = 24 * length(cell_lines), dpi = 300, limitsize = FALSE)
-magick::image_write(magick::image_read(png_path_final), path = tiff_path_final, format = "tiff")
+fig_s7_hem_combined <- wrap_plots(fig_s7_hem_list, ncol = 1)
+ggsave("~/project/IPSC_2025_Data/Supplmental_Figure6_hem_lineages.png",
+       plot = fig_s7_hem_combined, device = "png",
+       width = 10, height = 11 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
 
+install.packages("ggalluvial")
 
-library(openxlsx)
+library(ggalluvial)
+library(ggfittext)
+library(patchwork)
+library(scales)
+library(stringr)
+library(purrr)
+library(tibble)
 library(dplyr)
 
-# ---- Genes sheet: significant per-celltype DE genes (mashr results, Fig3b/3d) ----
-# NOTE: res_df_list's "adj.P.Val" column actually holds the mashr lfsr
-# (local false sign rate), not a BH-adjusted p-value - renamed here to
-# "lfsr" in the output so the spreadsheet doesn't mislabel it.
-genes_sig_df <- dplyr::bind_rows(res_df_list) %>%
-  dplyr::filter(sig) %>%
-  dplyr::transmute(
-    CellLine  = CellLine,
-    Celltype  = Celltype,
-    Gene      = Gene,
-    logFC     = logFC,
-    lfsr      = adj.P.Val,
-    direction = direction
-  ) %>%
-  dplyr::arrange(CellLine, Celltype, lfsr)
+# =========================================================================
+# 1. Category lookup tables, keyed by the EXACT final module name.
+#    NOTE: several tags (M4-1/M4-2, M5-1/M5-2, M3-1..M3-4) are kept as
+#    DISTINCT categories rather than collapsed back to one base label -
+#    the enrichment showed these are genuinely different biology, not the
+#    same theme split at two intensities. Modules with no term below
+#    Adjusted P < 0.05 are labeled "weak enrichment" rather than given a
+#    confident biological name.
+# =========================================================================
+module_categories_pallial <- c(
+  "JHC1-Pallial-M1"     = "Translation",
+  "JHC1-Pallial-M2"     = "Cell cycle",
+  "JHC1-Pallial-M4-1"   = "Ciliogenesis",
+  "JHC1-Pallial-M4-2"   = "Axon/neurite outgrowth",
+  "JHC1-Pallial-M5"     = "Axon guidance & synapse activity",
+  "JHC1-Pallial-UM1"    = "Unique module",
+  
+  "KOLF2.1-Pallial-M1"    = "Translation",
+  "KOLF2.1-Pallial-M3"    = "Apical-basal polarity",
+  "KOLF2.1-Pallial-M5-1"  = "Axon guidance & development",
+  "KOLF2.1-Pallial-M5-2"  = "Synapse assembly & activity",
+  "KOLF2.1-Pallial-UM1"   = "Unique module (weak enrichment)",
+  "KOLF2.1-Pallial-UM2"   = "Unique module (immune-like)",
+  
+  "O2C3-Pallial-M1"    = "Translation",
+  "O2C3-Pallial-M2"    = "Cell cycle",
+  "O2C3-Pallial-M3"    = "Apical-basal polarity",
+  "O2C3-Pallial-M4"    = "Adhesion / planar polarity",
+  "O2C3-Pallial-M5-1"  = "Axon guidance & development",
+  "O2C3-Pallial-M5-2"  = "Synapse assembly & activity",
+  "O2C3-Pallial-UM1"   = "Unique module (lipid/immune)"
+)
 
-# ---- Regulons sheet: significant regulon DE (Fig5b/5c) ----
-regulons_sig_df <- der_lineage_results %>%
-  as.data.frame() %>%
-  dplyr::filter(median_p_val_adj <= 0.05) %>%
-  dplyr::transmute(
-    CellLine          = gt_line,
-    Lineage           = Lineage,
-    Regulon           = Regulon,
-    mean_log2FC       = mean_log2FC,
-    median_p_val_adj  = median_p_val_adj,
-    max_p_val_adj     = max_p_val_adj
-  ) %>%
-  dplyr::arrange(CellLine, Lineage, median_p_val_adj)
+module_categories_hem <- c(
+  "JHC1-Hem-M1"   = "Translation",
+  "JHC1-Hem-M2"   = "Ciliogenesis",
+  "JHC1-Hem-M3"   = "Neuron differentiation",
+  "JHC1-Hem-UM1"  = "Unique module (weak enrichment)",
+  
+  "KOLF2.1-Hem-M1"    = "Translation",
+  "KOLF2.1-Hem-M2-1"  = "Ciliogenesis",
+  "KOLF2.1-Hem-M2-2"  = "Unique module (weak enrichment)",
+  "KOLF2.1-Hem-M3-1"  = "Neuron differentiation",
+  "KOLF2.1-Hem-M3-2"  = "Unique module (weak enrichment)",
+  "KOLF2.1-Hem-UM1"   = "Neuron differentiation (unmerged)",
+  
+  "O2C3-Hem-M1"    = "Translation",
+  "O2C3-Hem-M2"    = "Ciliogenesis",
+  "O2C3-Hem-M3-1"  = "Neuron differentiation",
+  "O2C3-Hem-M3-2"  = "Neuron differentiation",
+  "O2C3-Hem-M3-3"  = "Neuron differentiation (Wnt+)",
+  "O2C3-Hem-M3-4"  = "Neuron differentiation (Wnt-)",
+  "O2C3-Hem-UM1"   = "Unique module (interferon-like)"
+)
 
-wb <- createWorkbook()
+all_categories <- unique(c(module_categories_pallial, module_categories_hem))
+category_colors <- setNames(scales::hue_pal()(length(all_categories)), all_categories)
 
-addWorksheet(wb, "Genes")
-writeData(wb, "Genes", genes_sig_df, headerStyle = createStyle(textDecoration = "bold"))
-setColWidths(wb, "Genes", cols = seq_along(genes_sig_df), widths = "auto")
-freezePane(wb, "Genes", firstRow = TRUE)
+# =========================================================================
+# 2. Category strip - a thin colored bar under the dotplot's x-axis,
+#    mapping each module (in the SAME order as the dotplot) to its category
+# =========================================================================
+plot_category_strip <- function(module_order, category_lookup) {
+  strip_df <- tibble(
+    module = factor(module_order, levels = module_order),
+    Category = factor(category_lookup[module_order], levels = all_categories)
+  )
+  ggplot(strip_df, aes(x = module, y = 1, fill = Category)) +
+    geom_tile(height = 1, color = "white", linewidth = 0.3) +
+    scale_fill_manual(values = category_colors, drop = FALSE, name = "Category") +
+    scale_x_discrete(limits = module_order) +
+    theme_void() +
+    theme(legend.position = "bottom",
+          legend.text = element_text(size = 9),
+          plot.margin = margin(t = 0, r = 5, b = 5, l = 5))
+}
 
-addWorksheet(wb, "Regulons")
-writeData(wb, "Regulons", regulons_sig_df, headerStyle = createStyle(textDecoration = "bold"))
-setColWidths(wb, "Regulons", cols = seq_along(regulons_sig_df), widths = "auto")
-freezePane(wb, "Regulons", firstRow = TRUE)
 
-saveWorkbook(wb, "~/project/IPSC_2025_Data/Significant_DE_genes_and_regulons.xlsx", overwrite = TRUE)
+# =========================================================================
+# 3. Grouping-logic alluvial plot, using the refined per-module categories
+#    (joined against the rename maps you already have in your script)
+# =========================================================================
+build_module_grouping_df <- function(rename_maps, category_lookup, lineage_label) {
+  map_dfr(names(rename_maps), function(cl) {
+    m <- rename_maps[[cl]]
+    tibble(CellLine = cl, Lineage = lineage_label,
+           OldModule = names(m), NewModule = unname(m))
+  }) %>%
+    mutate(Category = category_lookup[NewModule])
+}
+
+pallial_grouping_df <- build_module_grouping_df(pallial_rename_maps, module_categories_pallial, "Pallial")
+hem_grouping_df     <- build_module_grouping_df(hem_rename_maps,     module_categories_hem,     "Hem")
+
+plot_module_grouping_alluvial <- function(df, title) {
+  df$Category <- factor(df$Category, levels = all_categories)
+  ggplot(df, aes(axis1 = CellLine, axis2 = OldModule, axis3 = Category)) +
+    geom_alluvium(aes(fill = Category), width = 1/4, alpha = 0.85) +
+    geom_stratum(width = 1/4, fill = "grey95", color = "grey30") +
+    geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3) +
+    scale_x_discrete(limits = c("Cell line", "Original module", "Functional category"),
+                     expand = c(0.08, 0.08)) +
+    scale_fill_manual(values = category_colors, drop = FALSE) +
+    labs(title = title, y = NULL) +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+          panel.grid = element_blank(), legend.position = "right",
+          legend.text = element_text(size = 8))
+}
+
+p_grouping_pallial <- plot_module_grouping_alluvial(pallial_grouping_df, "Pallial module grouping logic")
+p_grouping_hem     <- plot_module_grouping_alluvial(hem_grouping_df,     "Hem module grouping logic")
+
+fig_s7_grouping_combined <- p_grouping_pallial / p_grouping_hem +
+  plot_annotation(title = "Module renaming: original modules grouped by refined GO term theme")
+
+ggsave("~/project/IPSC_2025_Data/Supplmental_Figure6_grouping_logic.png",
+       plot = fig_s7_grouping_combined, device = "png",
+       width = 12, height = 12, dpi = 300, limitsize = FALSE)
+
