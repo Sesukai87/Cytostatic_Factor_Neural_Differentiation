@@ -112,6 +112,10 @@ dim(merged_IPSC@misc$SCENIC$RegulonsAUC)
 Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_pallial_lineages_by_line_wgcna")
 Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/merged_IPSC_derived_hem_lineages_by_line_wgcna")
 
+Cortical_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_pallial_modules_found_by_line")
+Hem_lineage_list <- readRDS("~/project/IPSC_2025_Data/checkpoint_hem_modules_found_by_line")
+
+
 # Transfer metadata separately PER CELL LINE (barcodes are unique dataset-
 # wide, so matching by rowname still correctly routes each cell's own
 # line-specific pseudotime/lineage values into merged_IPSC).
@@ -579,18 +583,261 @@ p_2 <- plot_grid(shared_title, heatmap_row, ncol = 1, rel_heights = c(0.08, 1))
 # via that same isolated test) and converting to TIFF afterward via
 # magick avoids the tiff() device's compositing issue entirely.
 png_path_5b <- "~/project/IPSC_2025_Data/Figure6b.png"
-tiff_path_5b <- "~/project/IPSC_2025_Data/Figure6b.tiff"
+tiff_path_5b <- "~/project/IPSC_2025_Data/Figure6b.png"
 ggsave(png_path_5b,
        plot = p_2, device = "png", bg = "white",
        width = 10 * length(cell_lines), height = 20, dpi = 300, limitsize = FALSE)
-magick::image_write(magick::image_read(png_path_5b), path = tiff_path_5b, format = "tiff")
+magick::image_write(magick::image_read(png_path_5b), path = tiff_path_5b, format = "png")
 
+#Figure 6b — ALTERNATIVE: top 3 up / top 3 down per cell line (not shared)
+# -----------------------------------------------------------------------
+# Same collapsing logic as get_shared_top_regulons() (each regulon's
+# OVERALL Protocol effect - mean_log2FC averaged across lineage), but
+# selected INDEPENDENTLY per cell line rather than requiring the regulon
+# to be present/consistent-direction across all three. This means each
+# cell line's panel can show DIFFERENT regulons in a DIFFERENT row order -
+# that's the deliberate tradeoff vs. the shared-list version's guaranteed
+# row alignment for cross-line comparison.
+# -----------------------------------------------------------------------
+get_pooled_top_regulons <- function(df, n = 3) {
+  top_by_line_lineage <- df %>%
+    as.data.frame() %>%
+    dplyr::group_by(gt_line, Lineage) %>%
+    dplyr::group_modify(~ {
+      pos <- dplyr::slice_max(.x, mean_log2FC, n = n, with_ties = FALSE)
+      neg <- dplyr::slice_min(.x, mean_log2FC, n = n, with_ties = FALSE)
+      dplyr::bind_rows(pos, neg)
+    }) %>%
+    dplyr::ungroup()
+  
+  unique(top_by_line_lineage$Regulon)
+}
+
+pooled_regulon_order <- get_pooled_top_regulons(der_lineage_results, n = 3)
+cat("Pooled regulon count (union across all cell lines/lineages):", length(pooled_regulon_order), "\n")
+print(pooled_regulon_order)
+
+# Reuses lineage_df, auc_mat, and plot_auc_heatmap_lineage() from the
+# block above - SAME pooled_regulon_order passed to every cell line, so
+# all panels show identical rows in identical order.
+heatmap_list_alt <- list()
+for (cl in cell_lines) {
+  auc_df_cl <- lineage_df %>%
+    filter(gt_line == cl) %>%
+    dplyr::select(cell, Protocol_Lineage) %>%
+    left_join(as.data.frame(t(auc_mat)) %>% tibble::rownames_to_column("cell"), by = "cell") %>%
+    dplyr::group_by(Protocol_Lineage) %>%
+    dplyr::summarise(across(-cell, mean), .groups = "drop")
+  
+  hm <- plot_auc_heatmap_lineage(pooled_regulon_order, auc_df_cl)
+  if (!is.null(hm)) {
+    hm$gtable <- gridExtra::arrangeGrob(hm$gtable, top = grid::textGrob(cl, gp = grid::gpar(fontsize = 22, fontface = "bold")))
+    heatmap_list_alt[[cl]] <- hm$gtable
+  }
+}
+
+heatmap_row_alt <- plot_grid(plotlist = heatmap_list_alt, nrow = 1)
+
+shared_title_alt <- ggdraw() +
+  draw_label("Average AUC per Protocol × Lineage, Pooled Top 3 Up/Down Regulons per Cell Line × Lineage",
+             fontface = "bold", size = 22, x = 0.5, hjust = 0.5)
+
+p_2_alt <- plot_grid(shared_title_alt, heatmap_row_alt, ncol = 1, rel_heights = c(0.08, 1))
+
+png_path_5b_alt <- "~/project/IPSC_2025_Data/Figure6b_top3_per_line.png"
+max_n_regulons <- length(pooled_regulon_order)
+plot_height_alt <- 4 + max_n_regulons * 0.35   # tune the 0.35-per-row multiplier if rows look cramped/sparse
+
+ggsave(png_path_5b_alt,
+       plot = p_2_alt, device = "png", bg = "white",
+       width = 10 * length(cell_lines), height = plot_height_alt, dpi = 300, limitsize = FALSE)
 
 # -----------------------------------------------------------------------
 # Figure 6c: regulon-pseudotime correlation, kept SEPARATE per cell line
 # (previously run only on the "minus" subset pooled across all lines).
 # Consistent lineage labels applied, matching Panels A/B.
 # -----------------------------------------------------------------------
+fig5c_list <- list()
+legend_source_plot <- NULL   # captured from one panel, used to build ONE shared (larger) legend
+
+for (cl in cell_lines) {
+  
+  merged_minus <- subset(merged_IPSC_tf, Protocol == "minus" & gt_line == cl)
+  merged_minus@misc$SCENIC$RegulonsAUC <- merged_minus@misc$SCENIC$RegulonsAUC[colnames(merged_minus),]
+  tf_auc <- merged_minus@misc$SCENIC$RegulonsAUC
+  tf_auc <- tf_auc %>% mutate(across(everything(), ~ replace_na(., 0)))
+  tf_counts <- t(tf_auc)
+  # Seurat v5 Assay5: update layers via LayerData<-(), not @counts<-/@data<-
+  LayerData(merged_minus, assay = "TF", layer = "counts") <- tf_counts
+  LayerData(merged_minus, assay = "TF", layer = "data") <- tf_counts
+  regulon_mat <- t(LayerData(merged_minus, assay = "TF", layer = "counts"))
+  
+  pseudotimes <- list(
+    dp  = merged_minus$dp_pseudotime, up  = merged_minus$up_pseudotime,
+    A1  = merged_minus$A1_pseudotime, A2  = merged_minus$A2_pseudotime,
+    epi = merged_minus$epi_pseudotime, crn = merged_minus$crn_pseudotime
+  )
+  correlate_regulons <- function(mat, pseudotime) {
+    apply(mat, 2, function(reg) {
+      # Guard against too few finite paired observations (e.g. a lineage
+      # with very few or zero cells within this cell line x protocol
+      # subset, since pseudotime is NA for any cell not on that lineage) -
+      # cor.test() errors with "not enough finite observations" below 2
+      # pairs, and needs >=3 for a meaningful t-based p-value anyway.
+      complete_idx <- is.finite(reg) & is.finite(pseudotime)
+      if (sum(complete_idx) < 3) {
+        # NOTE: names must exactly match the success branch below -
+        # ct$estimate is already named "cor" (pearson), so c(cor=...)
+        # produces the compound name "cor.cor", not "cor". Downstream code
+        # references cor_results2$cor.cor directly, so this NA fallback
+        # must match that naming exactly or apply()'s matrix assembly
+        # could silently produce inconsistent column names.
+        return(c(cor.cor = NA_real_, pval = NA_real_))
+      }
+      ct <- cor.test(reg[complete_idx], pseudotime[complete_idx], method = "pearson")
+      c(cor = ct$estimate, pval = ct$p.value)
+    }) %>% t() %>% as.data.frame()
+  }
+  cor_results <- lapply(names(pseudotimes), function(pt) {
+    df <- correlate_regulons(regulon_mat, pseudotimes[[pt]])
+    df$Regulon <- rownames(df)
+    df$Pseudotime <- pt
+    df
+  }) %>% bind_rows()
+  
+  cor_results2 <- cor_results %>%
+    left_join(
+      der_lineage_results %>% filter(gt_line == cl) %>%
+        dplyr::select(Regulon, Lineage, median_p_val_adj, max_p_val_adj, mean_log2FC),
+      by = c("Regulon", "Pseudotime" = "Lineage")
+    )
+  
+  threshold_cor <- 0
+  cor_results2 <- cor_results2 %>%
+    mutate(
+      de_dir = case_when(
+        !is.na(median_p_val_adj) & median_p_val_adj <= 0.05 & mean_log2FC > 0 ~ "up",
+        !is.na(median_p_val_adj) & median_p_val_adj <= 0.05 & mean_log2FC < 0 ~ "down",
+        TRUE ~ "ns"
+      ),
+      is_green = case_when(de_dir == "down" & cor.cor < -threshold_cor ~ TRUE, de_dir == "up" & cor.cor > threshold_cor ~ TRUE, TRUE ~ FALSE),
+      is_red   = case_when(de_dir == "down" & cor.cor >  threshold_cor ~ TRUE, de_dir == "up" & cor.cor < -threshold_cor ~ TRUE, TRUE ~ FALSE),
+      color_group = case_when(is_green ~ "lineage_aligned", is_red ~ "lineage_opposed", TRUE ~ "neutral"),
+      PseudotimeLabel = factor(unname(lineage_labels[Pseudotime]), levels = lineage_order_labeled)
+    )
+  
+  cor_results_plot <- cor_results2 %>% dplyr::filter(!is.na(mean_log2FC))
+  green_counts <- cor_results2 %>% dplyr::filter(is_green) %>% dplyr::count(PseudotimeLabel, name = "n_green")
+  red_counts   <- cor_results2 %>% dplyr::filter(is_red) %>% dplyr::count(PseudotimeLabel, name = "n_red")
+  
+  label_genes_epi_crn <- c("TCF7L1(+)", "OTX1(+)")
+  label_genes_dp_up_A1_A2 <- c("E2F2(+)", "HMGA2(+)", "NFIA(+)", "NFIX(+)", "NFIC(+)", "POU3F1(+)")
+  #label_genes_dp_up_A1_A2 <- c("POU3F1(+)", "STAT3(+)", "NFIA(+)", "NFIX(+)", "NFIC(+)")
+  
+  is_first  <- cl == cell_lines[1]                    # JHC1
+  is_middle <- cl == cell_lines[2]                     # KOLF2.1 - shared y-axis title
+  is_last   <- cl == cell_lines[length(cell_lines)]    # O2C3 - shared x-axis title
+  
+  p <- ggplot(cor_results_plot, aes(x = cor.cor, y = mean_log2FC)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
+    geom_point(aes(color = color_group), alpha = 0.7, size = 1.8) +
+    scale_color_manual(values = c("lineage_aligned" = "forestgreen", "lineage_opposed" = "firebrick", "neutral" = "grey70")) +
+    facet_wrap(~ PseudotimeLabel, scales = "free", nrow = 1) +
+    geom_point(data = subset(cor_results_plot, Regulon %in% label_genes_dp_up_A1_A2 &
+                               Pseudotime %in% c("dp", "up", "A1", "A2")), color = "black", size = 2.5) +
+    geom_text_repel(data = subset(cor_results_plot, Regulon %in% label_genes_dp_up_A1_A2 &
+                                    Pseudotime %in% c("dp", "up", "A1", "A2")),
+                    aes(label = Regulon), size = 6, color = "black", max.overlaps = Inf,
+                    box.padding = 0.4, point.padding = 0.3, segment.color = "black",
+                    segment.size = 0.4, min.segment.length = 0) +
+    geom_point(data = subset(cor_results_plot, Regulon %in% label_genes_epi_crn &
+                               Pseudotime %in% c("crn", "epi")), color = "black", size = 2.5) +
+    geom_text_repel(data = subset(cor_results_plot, Regulon %in% label_genes_epi_crn &
+                                    Pseudotime %in% c("crn", "epi")),
+                    aes(label = Regulon), size = 6, color = "black", max.overlaps = Inf,
+                    box.padding = 0.4, point.padding = 0.3, segment.color = "black",
+                    segment.size = 0.4, min.segment.length = 0) +
+    geom_text(data = green_counts, aes(x = -Inf, y = Inf, label = paste0("aligned = ", n_green)),
+              hjust = -0.1, vjust = 2.2, size = 6, color = "forestgreen", inherit.aes = FALSE) +
+    geom_text(data = red_counts, aes(x = -Inf, y = Inf, label = paste0("opposed = ", n_red)),
+              hjust = -0.1, vjust = 3.8, size = 6, color = "firebrick", inherit.aes = FALSE) +
+    labs(
+      x = NULL, y = NULL, color = "Regulon class",
+      title = paste0(cl, ": Regulon alignment of synchronized response with lineage dynamics")
+    ) +
+    theme_bw(base_size = 13) + big_text_theme +
+    theme(
+      strip.background = element_rect(fill = "grey90"),
+      axis.text = element_text(size = 15),
+      plot.title = element_text(size = 20, face = "bold", margin = margin(b = 10)),
+      plot.margin = margin(t = 20, r = 10, b = 10, l = 10),   # room so bigger titles aren't clipped
+      legend.position = "none"    # shared legend added once at combine time instead
+    )
+  
+  if (is_middle) {
+    p <- p + labs(y = "Lineage-level Average log2FC (+SDF vs -SDF protocol)") +
+      theme(axis.title.y = element_text(size = 20, face = "bold"))
+  }
+  if (is_last) {
+    p <- p + labs(x = "Pearson Correlation with pseudotime") +
+      theme(axis.title.x = element_text(size = 20, face = "bold"))
+  }
+  
+  # Capture a legend from ANY one panel (with a bigger legend theme applied)
+  # to build the single shared legend added once at combine time.
+  if (is.null(legend_source_plot)) {
+    legend_source_plot <- p +
+      theme(legend.position = "bottom",
+            legend.text = element_text(size = 16),
+            legend.title = element_text(size = 18, face = "bold"),
+            legend.key.size = unit(1.2, "cm"))
+  }
+  
+  fig5c_list[[cl]] <- p
+}
+
+fig5c_legend <- cowplot::get_legend(legend_source_plot)
+fig5c_combined <- plot_grid(
+  wrap_plots(fig5c_list, ncol = 1),
+  fig5c_legend,
+  ncol = 1, rel_heights = c(1, 0.06)
+)
+ggsave("~/project/IPSC_2025_Data/Figure6c.png",
+       plot = fig5c_combined, device = "png", bg = "white",
+       width = 24, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
+
+# -----------------------------------------------------------------------
+# Final combined Figure 5: layout (A / C) | B - A stacked above C in a
+# left column, B occupying a right column spanning the same total height.
+# Since both columns share the SAME overall height by construction, A and
+# C each naturally get half of B's height (i.e. B ends up ~2x the height
+# of A and ~2x the height of C), without needing a special ratio.
+# -----------------------------------------------------------------------
+AC_stack <- cowplot::plot_grid(fig5a_combined, fig5c_combined, ncol = 1, rel_heights = c(1, 1),
+                               labels = c("A", "C"), label_size = 24)
+fig5_final <- cowplot::plot_grid(AC_stack, p_2, nrow = 1, rel_widths = c(1, 1),
+                                 labels = c("", "B"), label_size = 24)
+png_path_final <- "~/project/IPSC_2025_Data/Figure6_combined.png"
+tiff_path_final <- "~/project/IPSC_2025_Data/Figure6_combined.tiff"
+ggsave(png_path_final,
+       plot = fig5_final, device = "png", bg = "white",
+       width = 40, height = 24 * length(cell_lines), dpi = 300, limitsize = FALSE)
+magick::image_write(magick::image_read(png_path_final), path = tiff_path_final, format = "tiff")
+
+
+
+
+
+
+
+
+
+-----------------------------------------------------------------------
+  # Figure 5c: regulon-pseudotime correlation, kept SEPARATE per cell line
+  # (previously run only on the "minus" subset pooled across all lines).
+  # Consistent lineage labels applied, matching Panels A/B.
+  # -----------------------------------------------------------------------
 fig5c_list <- list()
 legend_source_plot <- NULL   # captured from one panel, used to build ONE shared (larger) legend
 
@@ -736,7 +983,7 @@ fig5c_combined <- plot_grid(
   fig5c_legend,
   ncol = 1, rel_heights = c(1, 0.06)
 )
-ggsave("~/project/IPSC_2025_Data/Figure6c.tiff",
+ggsave("~/project/IPSC_2025_Data/Figure5c.tiff",
        plot = fig5c_combined, device = "tiff", bg = "white",
        width = 24, height = 8 * length(cell_lines), dpi = 300, limitsize = FALSE)
 
@@ -751,9 +998,58 @@ AC_stack <- cowplot::plot_grid(fig5a_combined, fig5c_combined, ncol = 1, rel_hei
                                labels = c("A", "C"), label_size = 24)
 fig5_final <- cowplot::plot_grid(AC_stack, p_2, nrow = 1, rel_widths = c(1, 1),
                                  labels = c("", "B"), label_size = 24)
-png_path_final <- "~/project/IPSC_2025_Data/Figure6_combined.png"
-tiff_path_final <- "~/project/IPSC_2025_Data/Figure6_combined.tiff"
+png_path_final <- "~/project/IPSC_2025_Data/Figure5_combined.png"
+tiff_path_final <- "~/project/IPSC_2025_Data/Figure5_combined.tiff"
 ggsave(png_path_final,
        plot = fig5_final, device = "png", bg = "white",
        width = 40, height = 24 * length(cell_lines), dpi = 300, limitsize = FALSE)
 magick::image_write(magick::image_read(png_path_final), path = tiff_path_final, format = "tiff")
+
+
+
+library(openxlsx)
+library(dplyr)
+
+# ---- Genes sheet: significant per-celltype DE genes (mashr results, Fig3b/3d) ----
+# NOTE: res_df_list's "adj.P.Val" column actually holds the mashr lfsr
+# (local false sign rate), not a BH-adjusted p-value - renamed here to
+# "lfsr" in the output so the spreadsheet doesn't mislabel it.
+genes_sig_df <- dplyr::bind_rows(res_df_list) %>%
+  dplyr::filter(sig) %>%
+  dplyr::transmute(
+    CellLine  = CellLine,
+    Celltype  = Celltype,
+    Gene      = Gene,
+    logFC     = logFC,
+    lfsr      = adj.P.Val,
+    direction = direction
+  ) %>%
+  dplyr::arrange(CellLine, Celltype, lfsr)
+
+# ---- Regulons sheet: significant regulon DE (Fig5b/5c) ----
+regulons_sig_df <- der_lineage_results %>%
+  as.data.frame() %>%
+  dplyr::filter(median_p_val_adj <= 0.05) %>%
+  dplyr::transmute(
+    CellLine          = gt_line,
+    Lineage           = Lineage,
+    Regulon           = Regulon,
+    mean_log2FC       = mean_log2FC,
+    median_p_val_adj  = median_p_val_adj,
+    max_p_val_adj     = max_p_val_adj
+  ) %>%
+  dplyr::arrange(CellLine, Lineage, median_p_val_adj)
+
+wb <- createWorkbook()
+
+addWorksheet(wb, "Genes")
+writeData(wb, "Genes", genes_sig_df, headerStyle = createStyle(textDecoration = "bold"))
+setColWidths(wb, "Genes", cols = seq_along(genes_sig_df), widths = "auto")
+freezePane(wb, "Genes", firstRow = TRUE)
+
+addWorksheet(wb, "Regulons")
+writeData(wb, "Regulons", regulons_sig_df, headerStyle = createStyle(textDecoration = "bold"))
+setColWidths(wb, "Regulons", cols = seq_along(regulons_sig_df), widths = "auto")
+freezePane(wb, "Regulons", firstRow = TRUE)
+
+saveWorkbook(wb, "~/project/IPSC_2025_Data/Significant_DE_genes_and_regulons.xlsx", overwrite = TRUE)
