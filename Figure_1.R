@@ -6,8 +6,275 @@ library(ggplot2)
 library(dplyr)
 library(patchwork)
 library(cowplot)
+library(SingleR)
+library(SingleCellExperiment)
+library(scuttle)
+library(Seurat)
+library(BiocParallel)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(pheatmap)
+library(viridis)
 
-merged_fetal_ipsc <- readRDS("~/project/IPSC_2025_Data/merged_Fetal_IPSC_derived_forebrain")
+IPSC <- readRDS("~/project/IPSC_2025_Data/merged_Fetal_IPSC_derived_forebrain")
+IPSC <- subset(merged_fetal_ipsc, Sampletye == "IPSC-Derived")
+gc()
+fetal <- readRDS("~/project/Seurat_Objects/20230131_multiome_clean.rds")
+DefaultAssay(fetal) <- "RNA"
+fetal@assays$ATAC <- NULL
+fetal@assays$SCT <- NULL
+fetal@assays$integrated <- NULL
+fetal <- JoinLayers(fetal)
+fetal$Celltype <- fetal$type
+fetal$Sampletype <- rep("Fetal", times = ncol(fetal))
+
+
+
+#Supplemental Figure 1
+bp <- MulticoreParam(workers = 4)   # set to your core count; SingleR parallelizes over this
+
+# ==================================================================
+# 1. Build the reference ONCE: aggregate fetal cells into per-fine-label
+#    pseudo-bulk profiles. This is the single biggest speedup - it turns a
+#    232k-cell reference into ~N_labels profiles, with no loss of accuracy
+#    for label scoring (SingleR aggregates internally anyway when told to).
+#    We trainSingleR() once and reuse it for every query chunk.
+# ==================================================================
+DefaultAssay(fetal) <- "RNA"
+fetal <- JoinLayers(fetal)
+ref_sce <- as.SingleCellExperiment(fetal, assay = "RNA")
+ref_sce <- logNormCounts(ref_sce)
+
+# Pre-train the classifier: DE genes + aggregated reference computed ONCE.
+# aggr.ref = TRUE collapses the reference to pseudo-bulk per label.
+set.seed(1)
+trained <- trainSingleR(
+  ref       = ref_sce,
+  labels    = ref_sce$type,
+  de.method = "wilcox",
+  aggr.ref  = TRUE,
+  BPPARAM   = bp
+)
+rm(ref_sce, fetal); gc()
+
+# ==================================================================
+# 2. Cluster the query PER SAMPLE (memory-friendly), pooling the results.
+#    Leiden clustering (algorithm = 4) on each SampleID subset; cluster IDs
+#    are namespaced by sample so they never collide across samples.
+# ==================================================================
+DefaultAssay(IPSC) <- "RNA"
+IPSC <- JoinLayers(IPSC)
+
+sample_ids <- unique(IPSC$SampleID)
+cluster_vec <- rep(NA_character_, ncol(IPSC))
+names(cluster_vec) <- colnames(IPSC)
+
+for (sid in sample_ids) {
+  cells <- colnames(IPSC)[IPSC$SampleID == sid]
+  sub <- subset(IPSC, cells = cells)
+  sub <- NormalizeData(sub, verbose = FALSE) |>
+    FindVariableFeatures(nfeatures = 2000, verbose = FALSE) |>
+    ScaleData(verbose = FALSE) |>
+    RunPCA(npcs = 30, verbose = FALSE) |>
+    FindNeighbors(dims = 1:30, verbose = FALSE) |>
+    FindClusters(resolution = 1.0, algorithm = 4, verbose = FALSE)  # 4 = Leiden
+  cluster_vec[cells] <- paste0(sid, "_c", as.character(Idents(sub)))
+  rm(sub); gc()
+}
+IPSC$leiden_persample <- cluster_vec[colnames(IPSC)]
+
+# ==================================================================
+# 3. Pseudo-bulk the query BY CLUSTER, then classify clusters (not cells).
+#    ~hundreds of profiles instead of 231k - SingleR now runs in seconds.
+# ==================================================================
+query_sce <- as.SingleCellExperiment(IPSC, assay = "RNA")
+query_sce <- logNormCounts(query_sce)
+
+pb_query <- aggregateAcrossCells(
+  query_sce,
+  ids = query_sce$leiden_persample,
+  statistics = "mean",          # mean lognorm expression per cluster
+  use.assay.type = "logcounts"
+)
+assay(pb_query, "logcounts") <- assay(pb_query, "logcounts")  # ensure logcounts present
+
+set.seed(1)
+pred_clust <- classifySingleR(
+  test    = pb_query,
+  trained = trained,
+  fine.tune = TRUE,
+  BPPARAM = bp
+)
+
+# Map each cluster's prediction back to its cells for cell-level summaries
+clust_labels     <- setNames(pred_clust$labels,       colnames(pb_query))
+clust_deltanext  <- setNames(pred_clust$delta.next,   colnames(pb_query))
+clust_pruned     <- setNames(is.na(pred_clust$pruned.labels), colnames(pb_query))
+
+IPSC <- AddMetaData(IPSC, metadata = unname(clust_labels[IPSC$leiden_persample]),   col.name = "SingleR_fine")
+IPSC <- AddMetaData(IPSC, metadata = unname(clust_deltanext[IPSC$leiden_persample]), col.name = "SingleR_delta_next")
+IPSC <- AddMetaData(IPSC, metadata = unname(clust_pruned[IPSC$leiden_persample]),    col.name = "SingleR_pruned")
+
+
+# ==================================================================
+# Supp FIGURE 1A: delta.next per assigned label (cluster-level, weighted by size)
+# ==================================================================
+clust_sizes <- as.integer(table(IPSC$leiden_persample)[colnames(pb_query)])
+delta_df <- tibble(
+  cluster    = colnames(pb_query),
+  assigned   = pred_clust$labels,
+  delta_next = pred_clust$delta.next,
+  n_cells    = clust_sizes,
+  pruned     = is.na(pred_clust$pruned.labels)
+)
+lab_order <- delta_df %>% group_by(assigned) %>%
+  summarise(med = median(delta_next, na.rm = TRUE), .groups = "drop") %>%
+  arrange(med) %>% pull(assigned)
+delta_df$assigned <- factor(delta_df$assigned, levels = lab_order)
+
+pB <- ggplot(delta_df, aes(x = assigned, y = delta_next)) +
+  geom_violin(fill = "grey85", color = "grey50", scale = "width") +
+  geom_jitter(aes(size = n_cells), width = 0.15, alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "firebrick") +
+  coord_flip() +
+  scale_size_continuous(name = "cells / cluster") +
+  labs(title = "Assignment confidence (delta.next) of fine fetal labels on iPSC-derived clusters",
+       subtitle = "Small delta.next = top label barely beats the next-best; points sized by cluster cell count",
+       x = "SingleR-assigned fine fetal label", y = "delta.next (top \u2212 second-best score)") +
+  theme_bw(base_size = 13)
+ggsave("~/project/IPSC_2025_Data/SuppFig1_SingleR_deltaNext.png",
+       plot = pB, width = 11, height = 9, dpi = 300)
+
+library(SingleR)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+
+# ------------------------------------------------------------------
+# Re-prune with an ABSOLUTE delta.med floor of 0.2 (on top of the default
+# MAD outlier rule). This changes which assignments are flagged, not the
+# delta.med values. get.thresholds = FALSE returns a logical: TRUE = pruned.
+# ------------------------------------------------------------------
+pruned_02 <- pruneScores(pred_clust, min.diff.med = 0.2)   # nmads = 3 kept at default
+
+# delta.med per cluster = assigned-label score minus median score across labels
+score_mat <- pred_clust$scores
+delta_med <- vapply(seq_len(nrow(score_mat)), function(i) {
+  s <- score_mat[i, ]
+  s[pred_clust$labels[i]] - median(s, na.rm = TRUE)
+}, numeric(1))
+
+df <- tibble(
+  cluster   = colnames(pb_query),
+  assigned  = pred_clust$labels,
+  delta_med = delta_med,
+  n_cells   = as.integer(table(IPSC$leiden_persample)[colnames(pb_query)]),
+  pruned    = pruned_02                      # TRUE if pruned under the 0.2 floor
+)
+
+# order labels by median delta.med (least-separated at the bottom)
+lab_order <- df %>% group_by(assigned) %>%
+  summarise(med = median(delta_med, na.rm = TRUE), .groups = "drop") %>%
+  arrange(med) %>% pull(assigned)
+df$assigned <- factor(df$assigned, levels = lab_order)
+
+p_deltamed_vln <- ggplot(df, aes(x = assigned, y = delta_med)) +
+  geom_violin(fill = "grey85", color = "grey50", scale = "width") +
+  geom_jitter(aes(size = n_cells, color = pruned), width = 0.15, alpha = 0.7) +
+  geom_hline(yintercept = 0.2, linetype = "dashed", color = "firebrick") +
+  coord_flip() +
+  scale_color_manual(values = c("FALSE" = "black", "TRUE" = "orange"),
+                     name = "Pruned\n(delta.med < 0.2)") +
+  scale_size_continuous(name = "cells / cluster") +
+  labs(
+    title = "SingleR delta.med per iPSC-derived cluster, with an absolute 0.2 pruning floor",
+    subtitle = "Orange = assignment pruned under min.diff.med = 0.2; dashed line marks the 0.2 threshold",
+    x = "SingleR-assigned fine fetal label",
+    y = "delta.med (assigned-label score \u2212 median score across labels)"
+  ) +
+  theme_bw(base_size = 13)
+
+ggsave("~/project/IPSC_2025_Data/SuppFig1_SingleR_deltaMed_prune02_vln.png",
+       plot = p_deltamed_vln, width = 11, height = 9, dpi = 300, bg = "white")
+
+# how many clusters (and cells) are now flagged
+df %>% summarise(pct_clusters_pruned = 100 * mean(pruned),
+                 pct_cells_pruned    = 100 * sum(n_cells[pruned]) / sum(n_cells))
+
+# ------------------------------------------------------------------
+# Marker panel: Figure 1C canonical markers + extra layer-specific
+# excitatory markers so we can test whether the FINE excitatory subclass
+# calls (EN-L2/3-IT, EN-L4-IT, EN-L5-IT, EN-L6-IT, EN-L5-ET, EN-L6b, etc.)
+# are actually distinguishable in the iPSC-derived cells.
+# ------------------------------------------------------------------
+marker_genes <- c(
+  # progenitors / glia (from Fig 1C)
+  "PAX6","GLI3","HES1",            # RG
+  "PTN", "PTPRZ1", "HOPX", #oRG
+  "EOMES","NEUROG2","NEUROD4",     # IPC_ExN
+  # deep-layer excitatory (Fig 1C DL + fine subclass markers)
+  "SOX5","BCL11B","ZFPM2",         # DL_ExN (Fig 1C)
+  # upper-layer excitatory (Fig 1C UL + fine subclass markers)
+  "SATB2","TAFA1","CELF2",           # UL_ExN (Fig 1C); RORB ~ L4
+  "GFAP","AQP4","CD44",           # Astrocyte
+  # hem / CRN / epithelial (Fig 1C)
+  "GAD2","GAD1","DLX2",         # Hem_RG
+  "NXPH1", "LHX6", "NKX2-1", "PVALB", #MGE
+  "PBX3", "MEIS2", "SIX3",
+  "ADARB2", "ERBB4", "CALB2",
+  "RELN","LHX1","RSPO3"             # CRN
+)
+
+
+marker_genes <- unique(marker_genes)
+marker_genes <- marker_genes[marker_genes %in% rownames(IPSC)]
+
+# ------------------------------------------------------------------
+# Group iPSC-derived cells by the FINE fetal label SingleR assigned them
+# (IPSC$SingleR_fine from the previous step). Restrict to excitatory /
+# progenitor / glia labels so the plot stays focused on the subtypes whose
+# separability is in question (edit `labels_to_show` as desired).
+# ------------------------------------------------------------------
+Idents(IPSC) <- "SingleR_fine"
+
+# Order labels developmentally so the dot plot reads RG -> IPC -> DL -> UL -> glia -> hem
+label_order <- c(
+  "RG-vRG","RG-oRG","RG-tRG",
+  "IPC-EN","EN-Newborn",
+  "EN-Non-IT-Immature","EN-L5-ET","EN-L6-CT","EN-L6b","EN-L5_6-NP",
+  "EN-IT-Immature","EN-L2_3-IT","EN-L4-IT","EN-L5-IT","EN-L6-IT",
+  "Astrocyte-Immature","Astrocyte-Protoplasmic","Astrocyte-Fibrous","IPC-Glia", "IN-MGE-Immature", "IN-MGE-PV",
+  "IN-dLGE-Immature",   "IN-CGE-Immature",  "Cajal-Retzius cell")
+present_labels <- label_order[label_order %in% unique(as.character(IPSC$SingleR_fine))]
+
+sub <- subset(IPSC, idents = present_labels)
+sub$SingleR_fine <- factor(as.character(sub$SingleR_fine), levels = present_labels)
+Idents(sub) <- "SingleR_fine"
+
+# ------------------------------------------------------------------
+# DotPlot: if the fine labels were real, each layer-specific marker would
+# light up in ITS label's column and be dim elsewhere. Flat rows across the
+# excitatory labels = the subclasses are NOT distinguishable in this data
+# ------------------------------------------------------------------
+DefaultAssay(sub) <- "RNA"
+p_dot <- DotPlot(sub, features = marker_genes, cluster.idents = FALSE) +
+  scale_color_gradient(low = "lightgrey", high = "blue") +
+  coord_flip() +
+  theme_bw(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        axis.text.y = element_text(size = 10)) +
+  labs(
+    title = "Canonical marker expression in iPSC-derived cells grouped by SingleR-assigned fine fetal label",
+    subtitle = "Layer-specific excitatory markers do not resolve the fine subclass labels (flat rows across EN-L*-IT columns)",
+    x = "Marker gene (Fig. 1C panel + layer-specific additions)",
+    y = "SingleR-assigned fine fetal label"
+  )
+
+ggsave("~/project/IPSC_2025_Data/SuppFig1_SingleR_markerDotplot.png",
+       plot = p_dot, width = 13, height = 10, dpi = 300, bg = "white")
+
+
 
 merged_fetal_ipsc <- NormalizeData(merged_fetal_ipsc) %>%
   FindVariableFeatures() %>%
